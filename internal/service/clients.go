@@ -15,26 +15,37 @@ func (c *Converter) MigrateClientsToContacts(ctx context.Context) error {
 	const perPage = 1000
 	c.log.Debug("starting clients-to-contacts migration")
 
-	lastID, err := c.newDB.MigrationStore().GetIDCursorProgress(ctx, StepClientsToContacts)
+	if err := c.newDB.MigrationStore().CheckAllStepsCompleted(ctx); err != nil {
+		return err
+	}
+
+	types, err := c.newDB.BotMappingStore().GetTypes(ctx)
 	if err != nil {
 		return err
 	}
-	if lastID > 0 {
-		c.log.Info("resuming clients-to-contacts migration", "lastID", lastID)
+
+	fromDate, toDate, err := c.GetMigrationWindow(ctx)
+	if err != nil {
+		return err
+	}
+
+	if err := c.newDB.MigrationStore().MarkStepInProgress(ctx, c.sessionID, StepClientsToContacts); err != nil {
+		return err
 	}
 
 	fail := func(cause error) error {
-		_ = c.newDB.MigrationStore().MarkStepFailed(ctx, StepClientsToContacts, 0, cause.Error())
+		_ = c.newDB.MigrationStore().MarkStepFailed(ctx, c.sessionID, StepClientsToContacts, 0, cause.Error())
 		return cause
 	}
 
+	lastID := 0
 	for {
 		tx, err := c.newDB.Pool().Begin(ctx)
 		if err != nil {
 			return fail(err)
 		}
 
-		clients, err := c.oldDB.ClientStore().Get(ctx, lastID, perPage)
+		clients, err := c.oldDB.ClientStore().GetFromDate(ctx, lastID, perPage, fromDate, toDate, types)
 		if err != nil {
 			tx.Rollback(ctx)
 			return fail(err)
@@ -75,18 +86,13 @@ func (c *Converter) MigrateClientsToContacts(ctx context.Context) error {
 			tx.Rollback(ctx)
 			return fail(err)
 		}
-		if err := c.newDB.MigrationStore().InsertMigrations(ctx, tx, migrationRows); err != nil {
+		if err := c.newDB.MigrationStore().InsertMigrations(ctx, tx, c.sessionID, migrationRows); err != nil {
 			tx.Rollback(ctx)
 			return fail(err)
 		}
 
 		// query is ORDER BY c.id on the outer SELECT, so the last row is the max id fetched
 		lastID = clients[len(clients)-1].ID
-
-		if err := c.newDB.MigrationStore().SaveIDCursorProgressInTx(ctx, tx, StepClientsToContacts, lastID); err != nil {
-			tx.Rollback(ctx)
-			return fail(err)
-		}
 
 		if err := tx.Commit(ctx); err != nil {
 			return fail(err)
@@ -105,31 +111,37 @@ func (c *Converter) MigrateClientsToContactsSyncMode(ctx context.Context) error 
 	const perPage = 1000
 	c.log.Debug("starting clients-to-contacts migration")
 
-	lastID, err := c.newDB.MigrationStore().GetIDCursorProgress(ctx, SyncStepClientsToContacts)
+	if err := c.newDB.MigrationStore().CheckAllStepsCompleted(ctx); err != nil {
+		return err
+	}
+
+	types, err := c.newDB.BotMappingStore().GetTypes(ctx)
 	if err != nil {
 		return err
 	}
-	if lastID > 0 {
-		c.log.Info("resuming clients-to-contacts migration", "lastID", lastID)
+
+	fromDate, toDate, err := c.GetMigrationWindow(ctx)
+	if err != nil {
+		return err
 	}
 
-	completedAt, err := c.GetStepCompletedAt(ctx, SyncStepClientsToContacts)
-	if err != nil {
+	if err := c.newDB.MigrationStore().MarkStepInProgress(ctx, c.sessionID, SyncStepClientsToContacts); err != nil {
 		return err
 	}
 
 	fail := func(cause error) error {
-		_ = c.newDB.MigrationStore().MarkStepFailed(ctx, SyncStepClientsToContacts, 0, cause.Error())
+		_ = c.newDB.MigrationStore().MarkStepFailed(ctx, c.sessionID, SyncStepClientsToContacts, 0, cause.Error())
 		return cause
 	}
 
+	lastID := 0
 	for {
 		tx, err := c.newDB.Pool().Begin(ctx)
 		if err != nil {
 			return fail(err)
 		}
 
-		clients, err := c.oldDB.ClientStore().GetFromDate(ctx, lastID, perPage, &completedAt)
+		clients, err := c.oldDB.ClientStore().GetFromDate(ctx, lastID, perPage, fromDate, toDate, types)
 		if err != nil {
 			tx.Rollback(ctx)
 			return fail(err)
@@ -140,49 +152,59 @@ func (c *Converter) MigrateClientsToContactsSyncMode(ctx context.Context) error 
 		}
 		c.log.Debug("clients page fetched", "lastID", lastID, "count", len(clients))
 		var (
-			contacts      []*modelnew.Contact
-			migrationRows []*modelnew.MigrationRow
+			contacts []*modelnew.Contact
+			pairs    []struct {
+				client  *old.Client
+				contact *modelnew.Contact
+			}
 		)
 		for _, client := range clients {
 			converted := convertClientToContact(client)
 			contacts = append(contacts, converted...)
 			for _, contact := range converted {
-				migrationRows = append(migrationRows, &modelnew.MigrationRow{
-					ID:         uuid.New(),
-					EntityType: modelnew.EntityTypeClientContact,
-					OldID:      strconv.Itoa(int(client.ID)),
-					NewID:      contact.ID,
-					DomainID:   contact.DomainID,
-				})
-				for _, gateway := range client.Gateways {
-					migrationRows = append(migrationRows, &modelnew.MigrationRow{
-						ID:         uuid.New(),
-						EntityType: modelnew.EntityTypeGatewayToContact,
-						OldID:      strconv.Itoa(int(gateway)),
-						NewID:      contact.ID,
-						DomainID:   contact.DomainID,
-					})
-				}
-
+				pairs = append(pairs, struct {
+					client  *old.Client
+					contact *modelnew.Contact
+				}{client: client, contact: contact})
 			}
 		}
+		// InsertContactsIgnoreConflicts resolves each contact.ID in place to
+		// the row's real id (its own on a fresh insert, the pre-existing
+		// row's on conflict) -- migrationRows must be built from that
+		// resolved ID, not the one generated before the insert, or a
+		// conflicted contact ends up with a chat_migration row pointing at a
+		// row that was never inserted.
 		rowsAffected, err := c.newDB.ContactStore().InsertContactsIgnoreConflicts(ctx, tx, contacts)
 		if err != nil {
 			tx.Rollback(ctx)
 			return fail(err)
 		}
-		if err := c.newDB.MigrationStore().InsertMigrations(ctx, tx, migrationRows); err != nil {
+		var migrationRows []*modelnew.MigrationRow
+		for _, p := range pairs {
+			migrationRows = append(migrationRows, &modelnew.MigrationRow{
+				ID:         uuid.New(),
+				EntityType: modelnew.EntityTypeClientContact,
+				OldID:      strconv.Itoa(int(p.client.ID)),
+				NewID:      p.contact.ID,
+				DomainID:   p.contact.DomainID,
+			})
+			for _, gateway := range p.client.Gateways {
+				migrationRows = append(migrationRows, &modelnew.MigrationRow{
+					ID:         uuid.New(),
+					EntityType: modelnew.EntityTypeGatewayToContact,
+					OldID:      strconv.Itoa(int(gateway)),
+					NewID:      p.contact.ID,
+					DomainID:   p.contact.DomainID,
+				})
+			}
+		}
+		if err := c.newDB.MigrationStore().InsertMigrations(ctx, tx, c.sessionID, migrationRows); err != nil {
 			tx.Rollback(ctx)
 			return fail(err)
 		}
 
 		// query is ORDER BY c.id on the outer SELECT, so the last row is the max id fetched
 		lastID = clients[len(clients)-1].ID
-
-		if err := c.newDB.MigrationStore().SaveIDCursorProgressInTx(ctx, tx, SyncStepClientsToContacts, lastID); err != nil {
-			tx.Rollback(ctx)
-			return fail(err)
-		}
 
 		if err := tx.Commit(ctx); err != nil {
 			return fail(err)
@@ -197,19 +219,57 @@ func (c *Converter) MigrateClientsToContactsSyncMode(ctx context.Context) error 
 	return nil
 }
 
+// portalFlowBotType is the public.bot_mapping.type value whose old_bot_id
+// rows identify the Salmon app's flow(s) -- used to tell Salmon app portal
+// clients apart from Agent app portal clients, which share chat.client.type
+// = 'portal' but must not be migrated by this step.
+const portalFlowBotType = "portal"
+
 func (c *Converter) MigratePortalClientsToContacts(ctx context.Context) error {
-	var (
-		perPage = 1000
-	)
+	const perPage = 1000
 	c.log.Debug("starting portal-clients-to-contacts migration")
-	tx, err := c.newDB.Pool().Begin(ctx)
+
+	if err := c.newDB.MigrationStore().CheckAllStepsCompleted(ctx); err != nil {
+		return err
+	}
+
+	completedSteps, err := c.newDB.MigrationStore().GetCompletedSteps(ctx, c.sessionID)
 	if err != nil {
 		return err
 	}
+	if _, ok := completedSteps[StepClientsToContacts]; !ok {
+		return fmt.Errorf("step %q requires step %q to be completed first", StepPortalClientsToContacts, StepClientsToContacts)
+	}
+
+	flowIDs, err := c.newDB.BotMappingStore().GetOldBotIDsByType(ctx, portalFlowBotType)
+	if err != nil {
+		return err
+	}
+
+	fromDate, toDate, err := c.GetMigrationWindow(ctx)
+	if err != nil {
+		return err
+	}
+
+	if err := c.newDB.MigrationStore().MarkStepInProgress(ctx, c.sessionID, StepPortalClientsToContacts); err != nil {
+		return err
+	}
+
+	fail := func(cause error) error {
+		_ = c.newDB.MigrationStore().MarkStepFailed(ctx, c.sessionID, StepPortalClientsToContacts, 0, cause.Error())
+		return cause
+	}
+
 	err = PagerFunc(ctx, perPage, func(ctx context.Context, offset, limit int) (bool, error) {
-		iterate := true
-		clients, err := c.oldDB.ClientStore().GetPortalClients(ctx, offset, limit)
+		tx, err := c.newDB.Pool().Begin(ctx)
 		if err != nil {
+			return false, err
+		}
+
+		iterate := true
+		clients, err := c.oldDB.ClientStore().GetPortalClientsFromDate(ctx, offset, limit, fromDate, toDate, flowIDs)
+		if err != nil {
+			tx.Rollback(ctx)
 			return false, err
 		}
 		if len(clients) < limit {
@@ -221,7 +281,7 @@ func (c *Converter) MigratePortalClientsToContacts(ctx context.Context) error {
 			migrationRows []*modelnew.MigrationRow
 		)
 		for _, client := range clients {
-			contact := convertPortalClientToContact(client)
+			contact := convertPortalClientToContact(client, c.portalChatIssuerID)
 			contacts = append(contacts, contact)
 			migrationRows = append(migrationRows, &modelnew.MigrationRow{
 				ID:         uuid.New(),
@@ -232,40 +292,70 @@ func (c *Converter) MigratePortalClientsToContacts(ctx context.Context) error {
 			})
 		}
 		if err := c.newDB.ContactStore().InsertContacts(ctx, tx, contacts); err != nil {
+			tx.Rollback(ctx)
 			return false, err
 		}
-		if err := c.newDB.MigrationStore().InsertMigrations(ctx, tx, migrationRows); err != nil {
+		if err := c.newDB.MigrationStore().InsertMigrations(ctx, tx, c.sessionID, migrationRows); err != nil {
+			tx.Rollback(ctx)
 			return false, err
 		}
+
+		if err := tx.Commit(ctx); err != nil {
+			return false, err
+		}
+
 		c.addRecordsMigrated(len(contacts))
 		return iterate, nil
 	})
 	if err != nil {
-		tx.Rollback(ctx)
-		return err
+		return fail(err)
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (c *Converter) MigratePortalClientsToContactsSyncMode(ctx context.Context) error {
-	var (
-		perPage = 1000
-	)
+	const perPage = 1000
 	c.log.Debug("starting portal-clients-to-contacts migration")
-	tx, err := c.newDB.Pool().Begin(ctx)
+
+	if err := c.newDB.MigrationStore().CheckAllStepsCompleted(ctx); err != nil {
+		return err
+	}
+
+	completedSteps, err := c.newDB.MigrationStore().GetCompletedSteps(ctx, c.sessionID)
+	if err != nil {
+		return err
+	}
+	if _, ok := completedSteps[SyncStepClientsToContacts]; !ok {
+		return fmt.Errorf("step %q requires step %q to be completed first", SyncStepPortalClientsToContacts, SyncStepClientsToContacts)
+	}
+
+	flowIDs, err := c.newDB.BotMappingStore().GetOldBotIDsByType(ctx, portalFlowBotType)
 	if err != nil {
 		return err
 	}
 
-	completedAt, err := c.GetStepCompletedAtInTx(ctx, tx, SyncStepPortalClientsToContacts)
+	fromDate, toDate, err := c.GetMigrationWindow(ctx)
 	if err != nil {
-		tx.Rollback(ctx)
 		return err
+	}
+
+	if err := c.newDB.MigrationStore().MarkStepInProgress(ctx, c.sessionID, SyncStepPortalClientsToContacts); err != nil {
+		return err
+	}
+
+	fail := func(cause error) error {
+		_ = c.newDB.MigrationStore().MarkStepFailed(ctx, c.sessionID, SyncStepPortalClientsToContacts, 0, cause.Error())
+		return cause
+	}
+
+	tx, err := c.newDB.Pool().Begin(ctx)
+	if err != nil {
+		return fail(err)
 	}
 
 	err = PagerFunc(ctx, perPage, func(ctx context.Context, offset, limit int) (bool, error) {
 		iterate := true
-		clients, err := c.oldDB.ClientStore().GetPortalClientsFromDate(ctx, offset, limit, &completedAt)
+		clients, err := c.oldDB.ClientStore().GetPortalClientsFromDate(ctx, offset, limit, fromDate, toDate, flowIDs)
 		if err != nil {
 			return false, err
 		}
@@ -274,26 +364,41 @@ func (c *Converter) MigratePortalClientsToContactsSyncMode(ctx context.Context) 
 		}
 		c.log.Debug("portal clients page fetched", "offset", offset, "count", len(clients))
 		var (
-			contacts      []*modelnew.Contact
-			migrationRows []*modelnew.MigrationRow
+			contacts []*modelnew.Contact
+			pairs    []struct {
+				client  *old.PortalClient
+				contact *modelnew.Contact
+			}
 		)
 		for _, client := range clients {
-			contact := convertPortalClientToContact(client)
+			contact := convertPortalClientToContact(client, c.portalChatIssuerID)
 			contacts = append(contacts, contact)
-			migrationRows = append(migrationRows, &modelnew.MigrationRow{
-				ID:         uuid.New(),
-				EntityType: modelnew.EntityTypeClientContact,
-				OldID:      strconv.Itoa(int(client.ID)),
-				NewID:      contact.ID,
-				DomainID:   contact.DomainID,
-			})
-
+			pairs = append(pairs, struct {
+				client  *old.PortalClient
+				contact *modelnew.Contact
+			}{client: client, contact: contact})
 		}
+		// InsertContactsIgnoreConflicts resolves each contact.ID in place to
+		// the row's real id (its own on a fresh insert, the pre-existing
+		// row's on conflict) -- migrationRows must be built from that
+		// resolved ID, not the one generated before the insert, or a
+		// conflicted contact ends up with a chat_migration row pointing at a
+		// row that was never inserted.
 		rowsAffected, err := c.newDB.ContactStore().InsertContactsIgnoreConflicts(ctx, tx, contacts)
 		if err != nil {
 			return false, err
 		}
-		if err := c.newDB.MigrationStore().InsertMigrations(ctx, tx, migrationRows); err != nil {
+		var migrationRows []*modelnew.MigrationRow
+		for _, p := range pairs {
+			migrationRows = append(migrationRows, &modelnew.MigrationRow{
+				ID:         uuid.New(),
+				EntityType: modelnew.EntityTypeClientContact,
+				OldID:      strconv.Itoa(p.client.ID),
+				NewID:      p.contact.ID,
+				DomainID:   p.contact.DomainID,
+			})
+		}
+		if err := c.newDB.MigrationStore().InsertMigrations(ctx, tx, c.sessionID, migrationRows); err != nil {
 			return false, err
 		}
 		c.addRecordsMigrated(int(rowsAffected))
@@ -301,10 +406,13 @@ func (c *Converter) MigratePortalClientsToContactsSyncMode(ctx context.Context) 
 	})
 	if err != nil {
 		tx.Rollback(ctx)
-		return err
+		return fail(err)
 	}
 
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return fail(err)
+	}
+	return nil
 }
 
 func convertClientToContact(client *old.Client) []*modelnew.Contact {
@@ -328,7 +436,7 @@ func convertClientToContact(client *old.Client) []*modelnew.Contact {
 	return contacts
 }
 
-func convertPortalClientToContact(client *old.PortalClient) *modelnew.Contact {
+func convertPortalClientToContact(client *old.PortalClient, issuerID string) *modelnew.Contact {
 	updatedAt := client.CreatedAt
 	if client.UpdatedAt != nil {
 		updatedAt = *client.UpdatedAt
@@ -340,7 +448,7 @@ func convertPortalClientToContact(client *old.PortalClient) *modelnew.Contact {
 			CreatedAt: client.CreatedAt,
 			UpdatedAt: updatedAt,
 		},
-		IssuerID:  client.Iss,
+		IssuerID:  issuerID,
 		SubjectID: client.Sub,
 		Type:      client.Type,
 		Name:      client.Name,

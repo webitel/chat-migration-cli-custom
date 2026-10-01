@@ -1,568 +1,95 @@
 package service
 
 import (
-	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/base64"
-	"encoding/json"
-	"fmt"
-	"io"
-	"log/slog"
-	"net/http"
-	"net/url"
 	"strconv"
-	"strings"
 
 	"github.com/google/uuid"
 	modelnew "github.com/webitel/chat-migration-cli/internal/model/new"
-	modelold "github.com/webitel/chat-migration-cli/internal/model/old"
-	"github.com/webitel/chat-migration-cli/internal/model/old/proto"
 )
 
+// MigrateFacebookProviders does not create gates, meta apps or bots: those
+// are configured manually in new_db before migration (see
+// .md/enhancements/migration_steps/facebook.md). It only writes
+// chat_migration rows mapping each old Facebook/WhatsApp provider (chat.bot,
+// resolved via public.bot_mapping.old_bot_id/flow_id) to its pre-existing
+// im_provider.gates row, via bot_mapping.gate_id.
+//
+// old_id is chat.bot.id, not flow_id: SyncContactVias joins
+// gateway_to_contact.old_id (chat.channel.connection, which clients_to_contacts
+// records as chat.bot.id) against provider_to_gateway.old_id -- using flow_id
+// here would silently break that join. Full mode only; see
+// MigrateFacebookProvidersSyncMode.
 func (c *Converter) MigrateFacebookProviders(ctx context.Context) error {
-	const (
-		perPage = 1000
-	)
 	c.log.Debug("starting facebook/whatsapp providers migration")
 
-	startOffset, err := c.newDB.MigrationStore().GetStepProgress(ctx, StepFacebookAndWhatsApp)
-	if err != nil {
-		return err
-	}
-	if startOffset > 0 {
-		c.log.Info("resuming facebook/whatsapp providers migration", "startOffset", startOffset)
-	}
-
-	lastCommittedOffset := startOffset
 	fail := func(cause error) error {
-		_ = c.newDB.MigrationStore().MarkStepFailed(ctx, StepFacebookAndWhatsApp, lastCommittedOffset, cause.Error())
+		_ = c.newDB.MigrationStore().MarkStepFailed(ctx, c.sessionID, StepFacebookAndWhatsApp, 0, cause.Error())
 		return cause
 	}
 
-	err = PagerFunc(ctx, perPage, func(ctx context.Context, offset, limit int) (bool, error) {
-		tx, err := c.newDB.Pool().Begin(ctx)
-		if err != nil {
-			return false, err
-		}
-
-		iterate := true
-		absOffset := offset + startOffset
-		providers, err := c.oldDB.BotStore().GetMetaGateways(ctx, absOffset, limit)
-		if err != nil {
-			tx.Rollback(ctx)
-			return false, err
-		}
-		if len(providers) < limit {
-			iterate = false
-		}
-		c.log.Debug("providers page fetched", "offset", absOffset, "count", len(providers))
-		appsOldNewMap, gatesOldNewMap, err := c.BuildMetaGates(providers)
-		if err != nil {
-			tx.Rollback(ctx)
-			return false, err
-		}
-		var (
-			gates []*modelnew.Gate
-			apps  []*modelnew.MetaApp
-			wabas []*modelnew.GateWABA
-			pages []*modelnew.Facebook
-			bots  []*modelnew.Bot
-		)
-		migrationRows := []*modelnew.MigrationRow{}
-		for oldID, providerGates := range gatesOldNewMap {
-			for _, gate := range providerGates {
-				gates = append(gates, gate)
-				if gate.FacebookPage != nil {
-					pages = append(pages, gate.FacebookPage)
-				} else if gate.WhatsAppAccount != nil {
-					wabas = append(wabas, gate.WhatsAppAccount)
-				} else {
-					continue
-				}
-				migrationRows = append(migrationRows,
-					&modelnew.MigrationRow{
-						ID:         uuid.New(),
-						OldID:      strconv.Itoa(oldID),
-						NewID:      gate.ID,
-						DomainID:   int(gate.DC),
-						EntityType: modelnew.EntityTypeProviderToGateway,
-					})
-
-				bots = append(bots, gate.Bot)
-
-			}
-		}
-		for oldID, app := range appsOldNewMap {
-			apps = append(apps, app)
-			migrationRows = append(migrationRows,
-				&modelnew.MigrationRow{
-					ID:         uuid.New(),
-					OldID:      strconv.Itoa(oldID),
-					NewID:      app.ID,
-					DomainID:   app.DomainID,
-					EntityType: modelnew.EntityTypeProviderToMetaApp,
-				})
-		}
-		err = c.newDB.ProviderStore().InsertMetaApps(ctx, tx, apps)
-		if err != nil {
-			tx.Rollback(ctx)
-			return false, err
-		}
-		err = c.newDB.ProviderStore().InsertGates(ctx, tx, gates)
-		if err != nil {
-			tx.Rollback(ctx)
-			return false, err
-		}
-		err = c.newDB.ProviderStore().InsertFacebooks(ctx, tx, pages)
-		if err != nil {
-			tx.Rollback(ctx)
-			return false, err
-		}
-		err = c.newDB.ProviderStore().InsertGateWABAs(ctx, tx, wabas)
-		if err != nil {
-			tx.Rollback(ctx)
-			return false, err
-		}
-		err = c.newDB.ProviderStore().InsertBots(ctx, tx, bots)
-		if err != nil {
-			tx.Rollback(ctx)
-			return false, err
-		}
-		err = c.newDB.MigrationStore().InsertMigrations(ctx, tx, migrationRows)
-		if err != nil {
-			tx.Rollback(ctx)
-			return false, err
-		}
-
-		if err := c.newDB.MigrationStore().SaveStepProgressInTx(ctx, tx, StepFacebookAndWhatsApp, absOffset+limit); err != nil {
-			tx.Rollback(ctx)
-			return false, err
-		}
-
-		if err := tx.Commit(ctx); err != nil {
-			return false, err
-		}
-		lastCommittedOffset = absOffset + limit
-
-		c.log.Debug("providers page committed", "offset", absOffset, "count", len(providers))
-		c.addRecordsMigrated(len(gates))
-		return iterate, nil
-	})
-
+	gateMappings, err := c.newDB.BotMappingStore().GetGateMappings(ctx)
 	if err != nil {
 		return fail(err)
 	}
-	return nil
-}
-func (c *Converter) MigrateFacebookProvidersSyncMode(ctx context.Context) error {
-	const (
-		perPage  = 1000
-		stepName = SyncStepFacebookAndWhatsApp
-	)
-	c.log.Debug("starting facebook/whatsapp providers migration")
-
-	startOffset, err := c.newDB.MigrationStore().GetStepProgress(ctx, stepName)
-	if err != nil {
-		return err
-	}
-	if startOffset > 0 {
-		c.log.Info("resuming facebook/whatsapp providers migration", "startOffset", startOffset)
+	if len(gateMappings) == 0 {
+		return nil
 	}
 
-	completedAt, err := c.GetStepCompletedAt(ctx, stepName)
-	if err != nil {
-		return err
+	flowIDs := make([]int, 0, len(gateMappings))
+	gateByFlowID := make(map[int]uuid.UUID, len(gateMappings))
+	for _, m := range gateMappings {
+		flowIDs = append(flowIDs, m.OldBotID)
+		gateByFlowID[m.OldBotID] = m.GateID
 	}
 
-	lastCommittedOffset := startOffset
-	fail := func(cause error) error {
-		_ = c.newDB.MigrationStore().MarkStepFailed(ctx, stepName, lastCommittedOffset, cause.Error())
-		return cause
-	}
-
-	err = PagerFunc(ctx, perPage, func(ctx context.Context, offset, limit int) (bool, error) {
-		tx, err := c.newDB.Pool().Begin(ctx)
-		if err != nil {
-			return false, err
-		}
-
-		iterate := true
-		absOffset := offset + startOffset
-		providers, err := c.oldDB.BotStore().GetMetaGatewaysFromDate(ctx, absOffset, limit, completedAt)
-		if err != nil {
-			tx.Rollback(ctx)
-			return false, err
-		}
-		if len(providers) == 0 {
-			tx.Rollback(ctx)
-			return false, nil
-		}
-		if len(providers) < limit {
-			iterate = false
-		}
-		c.log.Debug("providers page fetched", "offset", absOffset, "count", len(providers))
-		appsOldNewMap, gatesOldNewMap, err := c.BuildMetaGates(providers)
-		if err != nil {
-			tx.Rollback(ctx)
-			return false, err
-		}
-		var (
-			gates []*modelnew.Gate
-			apps  []*modelnew.MetaApp
-			wabas []*modelnew.GateWABA
-			pages []*modelnew.Facebook
-			bots  []*modelnew.Bot
-		)
-		migrationRows := []*modelnew.MigrationRow{}
-		for oldID, providerGates := range gatesOldNewMap {
-			for _, gate := range providerGates {
-				gates = append(gates, gate)
-				if gate.FacebookPage != nil {
-					pages = append(pages, gate.FacebookPage)
-				} else if gate.WhatsAppAccount != nil {
-					wabas = append(wabas, gate.WhatsAppAccount)
-				} else {
-					continue
-				}
-				migrationRows = append(migrationRows,
-					&modelnew.MigrationRow{
-						ID:         uuid.New(),
-						OldID:      strconv.Itoa(oldID),
-						NewID:      gate.ID,
-						DomainID:   int(gate.DC),
-						EntityType: modelnew.EntityTypeProviderToGateway,
-					})
-
-				bots = append(bots, gate.Bot)
-
-			}
-		}
-		for oldID, app := range appsOldNewMap {
-			apps = append(apps, app)
-			migrationRows = append(migrationRows,
-				&modelnew.MigrationRow{
-					ID:         uuid.New(),
-					OldID:      strconv.Itoa(oldID),
-					NewID:      app.ID,
-					DomainID:   app.DomainID,
-					EntityType: modelnew.EntityTypeProviderToMetaApp,
-				})
-		}
-		err = c.newDB.ProviderStore().InsertMetaApps(ctx, tx, apps)
-		if err != nil {
-			tx.Rollback(ctx)
-			return false, err
-		}
-		err = c.newDB.ProviderStore().InsertGates(ctx, tx, gates)
-		if err != nil {
-			tx.Rollback(ctx)
-			return false, err
-		}
-		err = c.newDB.ProviderStore().InsertFacebooks(ctx, tx, pages)
-		if err != nil {
-			tx.Rollback(ctx)
-			return false, err
-		}
-		err = c.newDB.ProviderStore().InsertGateWABAs(ctx, tx, wabas)
-		if err != nil {
-			tx.Rollback(ctx)
-			return false, err
-		}
-		err = c.newDB.ProviderStore().InsertBots(ctx, tx, bots)
-		if err != nil {
-			tx.Rollback(ctx)
-			return false, err
-		}
-		err = c.newDB.MigrationStore().InsertMigrations(ctx, tx, migrationRows)
-		if err != nil {
-			tx.Rollback(ctx)
-			return false, err
-		}
-
-		if err := c.newDB.MigrationStore().SaveStepProgressInTx(ctx, tx, stepName, absOffset+limit); err != nil {
-			tx.Rollback(ctx)
-			return false, err
-		}
-
-		if err := tx.Commit(ctx); err != nil {
-			return false, err
-		}
-		lastCommittedOffset = absOffset + limit
-
-		c.log.Debug("providers page committed", "offset", absOffset, "count", len(providers))
-		c.addRecordsMigrated(len(gates))
-		return iterate, nil
-	})
-
+	providers, err := c.oldDB.BotStore().GetProviderIDsByFlowIDs(ctx, flowIDs)
 	if err != nil {
 		return fail(err)
 	}
-	return nil
-}
 
-func (c *Converter) BuildMetaGates(providers []*modelold.Provider[modelold.FBProviderMetadata]) (map[int]*modelnew.MetaApp, map[int][]*modelnew.Gate, error) {
-	resultGates := map[int][]*modelnew.Gate{}
-	resultApps := map[int]*modelnew.MetaApp{}
-	for _, provider := range providers {
-		gates := []*modelnew.Gate{}
-		metadata := provider.Metadata
-		if metadata == nil {
-			c.log.Warn("metadata is nil", slog.Int("provider_id", provider.ID))
-			continue
-		}
-		metaApp := &modelnew.MetaApp{
-			ID:          uuid.New(),
-			Name:        provider.Name,
-			AppID:       metadata.ClientID,
-			AppSecret:   metadata.ClientSecret,
-			URI:         provider.URI,
-			CreatedAt:   provider.CreatedAt,
-			UpdatedAt:   provider.UpdatedAt,
-			VerifyToken: RandomBase64String(64),
-			DomainID:    provider.DC,
-		}
-
-		if metadata.FB != nil {
-			result, err := c.BuildFBGates(metaApp, provider)
-			if err != nil {
-				return nil, nil, err
-			}
-			gates = append(gates, result...)
-		}
-
-		if metadata.WA != "" {
-			result, err := c.BuildWAGates(metaApp, provider)
-			if err != nil {
-				return nil, nil, err
-			}
-			gates = append(gates, result...)
-		}
-
-		if metadata.IG != nil {
-			metaApp.Scopes = append(metaApp.Scopes,
-				"instagram_basic",
-				"instagram_manage_messages",
-			)
-		}
-		if len(metaApp.Scopes) == 0 {
-			slog.Warn("provider %d has no scopes, skipping", slog.Int("provider_id", provider.ID))
-			continue
-		}
-
-		resultGates[provider.ID] = gates
-		resultApps[provider.ID] = metaApp
-
-	}
-	return resultApps, resultGates, nil
-}
-
-func (c *Converter) BuildFBGates(metaApp *modelnew.MetaApp, provider *modelold.Provider[modelold.FBProviderMetadata]) ([]*modelnew.Gate, error) {
-	var gates []*modelnew.Gate
-	metaApp.Scopes = append(metaApp.Scopes,
-		"pages_show_list",
-		"pages_messaging",
-		"pages_manage_metadata",
-	)
-	fbPages, err := c.convertToFacebookPages(provider.Metadata.FB)
-	if err != nil {
-		return nil, err
-	}
-	for _, page := range fbPages {
-		gate, err := c.buildGate(provider, "facebook")
-		if err != nil {
-			return nil, err
-		}
-		page.GateID = gate.ID
-		page.MetaAppID = metaApp.ID
-		gate.FacebookPage = page
-		gates = append(gates, gate)
-	}
-	return gates, nil
-}
-
-func (c *Converter) BuildWAGates(metaApp *modelnew.MetaApp, provider *modelold.Provider[modelold.FBProviderMetadata]) ([]*modelnew.Gate, error) {
-	var gates []*modelnew.Gate
-	metaApp.Scopes = append(metaApp.Scopes,
-		"whatsapp_bussiness_management",
-		"whatsapp_bussiness_messaging",
-	)
-	waAccounts, err := c.convertToWABAAccounts(provider.Metadata.WhatsAppToken, provider.Metadata.WA)
-	if err != nil {
-		return nil, err
-	}
-	for _, account := range waAccounts {
-		gate, err := c.buildGate(provider, "whatsapp")
-		if err != nil {
-			return nil, err
-		}
-		account.MetaAppID = metaApp.ID
-		account.ID = gate.ID
-		gate.WhatsAppAccount = account
-		gates = append(gates, gate)
-	}
-	return gates, nil
-}
-
-func (c *Converter) buildGate(provider *modelold.Provider[modelold.FBProviderMetadata], providerType string) (*modelnew.Gate, error) {
-	metadata := provider.Metadata
-	if metadata == nil {
-		return nil, fmt.Errorf("metadata is nil")
-	}
-	gateID := uuid.New()
-	gate := &modelnew.Gate{
-		ID:        gateID,
-		DC:        int64(provider.DC),
-		Name:      fmt.Sprintf("%s (%s)", provider.Name, providerType),
-		Enabled:   provider.Enabled,
-		CreatedAt: provider.CreatedAt,
-		UpdatedAt: provider.UpdatedAt,
-
-		Bot: &modelnew.Bot{
-			ID:        uuid.New(),
-			Sub:       "schema",
-			Iss:       strconv.Itoa(provider.FlowID),
-			GateID:    gateID,
-			CreatedAt: provider.CreatedAt,
-		},
-	}
-	return gate, nil
-}
-
-func RandomBase64String(n int) string {
-	encoding := base64.RawURLEncoding
-	buf := make([]byte, encoding.DecodedLen(n))
-	if _, err := io.ReadFull(rand.Reader, buf); err != nil {
-		panic(err)
-	}
-	text := encoding.EncodeToString(buf)
-	return text[:n]
-}
-
-func (c *Converter) convertToFacebookPages(fb *proto.Messenger) ([]*modelnew.Facebook, error) {
-	pages := make([]*modelnew.Facebook, 0, len(fb.Pages))
-	for _, page := range fb.Pages {
-		if page == nil {
-			continue
-		}
-		if len(page.Accounts) == 0 {
-			continue
-		}
-		encryptedToken, err := c.encryptor.EncryptToken(page.Accounts[0].AccessToken)
-		if err != nil {
-			return nil, fmt.Errorf("encrypt facebook page token: %w", err)
-		}
-		pages = append(pages, &modelnew.Facebook{
-			PageID:    page.Id,
-			PageToken: encryptedToken,
+	migrationRows := make([]*modelnew.MigrationRow, 0, len(providers))
+	matchedFlowIDs := make(map[int]struct{}, len(providers))
+	for _, p := range providers {
+		matchedFlowIDs[p.FlowID] = struct{}{}
+		migrationRows = append(migrationRows, &modelnew.MigrationRow{
+			ID:         uuid.New(),
+			EntityType: modelnew.EntityTypeProviderToGateway,
+			OldID:      strconv.Itoa(p.ID),
+			NewID:      gateByFlowID[p.FlowID],
+			DomainID:   botMappingDomainID,
 		})
-
 	}
-	return pages, nil
-}
-
-func (c *Converter) convertToWABAAccounts(token, encoded string) ([]*modelnew.GateWABA, error) {
-	accounts, err := c.fetchAccounts(token, encoded)
-	if err != nil {
-		return nil, err
-	}
-	encryptedToken, err := c.encryptor.EncryptToken(token)
-	if err != nil {
-		return nil, fmt.Errorf("encrypt whatsapp access token: %w", err)
-	}
-	var result []*modelnew.GateWABA
-	for _, account := range accounts {
-		for _, number := range account.PhoneNumbers.Data {
-			result = append(result, &modelnew.GateWABA{
-				ID:                   uuid.New(),
-				PhoneNumber:          number.PhoneNumber,
-				PhoneNumberID:        number.ID,
-				AccessToken:          []byte(encryptedToken),
-				AccessTokenExpiresAt: nil,
-				BusinessID:           account.ID,
-			})
+	for flowID := range gateByFlowID {
+		if _, ok := matchedFlowIDs[flowID]; !ok {
+			c.log.Warn("bot_mapping.gate_id is set but no matching chat.bot row found for flow_id, skipping", "flow_id", flowID)
 		}
 	}
-	return result, nil
-}
 
-type PhoneNumber struct {
-	ID           string `json:"id"`
-	PhoneNumber  string `json:"display_phone_number"`
-	VerifiedName string `json:"verified_name"`
-}
-
-type BusinessAccount struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	PhoneNumbers struct {
-		Data []*PhoneNumber `json:"data"`
-	} `json:"phone_numbers"`
-}
-
-func (c *Converter) fetchAccounts(waToken, waEncoded string) ([]*BusinessAccount, error) {
-	wabaIDs, err := decodeWABAIDs(waEncoded)
+	tx, err := c.newDB.Pool().Begin(ctx)
 	if err != nil {
-		return nil, err
+		return fail(err)
 	}
 
-	accounts, err := fetchAccounts(waToken, wabaIDs)
-	if err != nil {
-		return nil, err
+	if err := c.newDB.MigrationStore().InsertMigrations(ctx, tx, c.sessionID, migrationRows); err != nil {
+		tx.Rollback(ctx)
+		return fail(err)
 	}
 
-	return accounts, nil
+	if err := tx.Commit(ctx); err != nil {
+		return fail(err)
+	}
+
+	c.addRecordsMigrated(len(migrationRows))
+	return nil
 }
 
-// --- Decode "wa" metadata value into WABA IDs ---
-
-func decodeWABAIDs(encoded string) ([]string, error) {
-	data, err := base64.RawURLEncoding.DecodeString(encoded)
-	if err != nil {
-		return nil, err
-	}
-	const (
-		offset = '0'       // 0x30
-		delim  = ':' - '0' // 0x0A
-	)
-	var ids []string
-	for _, part := range bytes.Split(data, []byte{delim}) {
-		if len(part) == 0 {
-			continue
-		}
-		ascii := make([]byte, len(part))
-		for i, b := range part {
-			ascii[i] = b + offset
-		}
-		ids = append(ids, string(ascii))
-	}
-	return ids, nil
-}
-
-// --- Fetch accounts from Meta Graph API ---
-
-func fetchAccounts(token string, wabaIDs []string) ([]*BusinessAccount, error) {
-	params := url.Values{
-		"ids":          {strings.Join(wabaIDs, ",")},
-		"fields":       {"id,name,phone_numbers{id,display_phone_number,verified_name}"},
-		"access_token": {token},
-	}
-	resp, err := http.Get("https://graph.facebook.com/v19.0/?" + params.Encode())
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-
-	var result map[string]*BusinessAccount
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, err
-	}
-
-	accounts := make([]*BusinessAccount, 0, len(result))
-	for _, a := range result {
-		accounts = append(accounts, a)
-	}
-	return accounts, nil
+// MigrateFacebookProvidersSyncMode is a no-op: gates are linked once, in
+// full mode, from public.bot_mapping -- there is nothing new to pick up on a
+// sync run. If bot_mapping gains new gate_id values later, re-run the
+// full-mode step (MIGRATION_START_FROM_STEP/MIGRATION_SINGLE_STEP), after
+// manually removing the rows it previously created.
+func (c *Converter) MigrateFacebookProvidersSyncMode(ctx context.Context) error {
+	c.log.Info("facebook/whatsapp providers sync step is a no-op; gates are migrated once in full mode from public.bot_mapping")
+	return nil
 }

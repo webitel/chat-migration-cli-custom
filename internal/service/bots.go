@@ -4,249 +4,91 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"strings"
 
 	"github.com/google/uuid"
 	modelnew "github.com/webitel/chat-migration-cli/internal/model/new"
-	"github.com/webitel/chat-migration-cli/internal/model/old"
 )
 
-const BotIssuerID = "schema"
+// botMappingDomainID is the domain_id recorded for every chat_migration row
+// this step writes. public.bot_mapping doesn't carry a domain, and the old
+// chat.bot table (which did, via dc) is no longer read -- see
+// .md/enhancements/migration_steps/bots_to_contacts.md. Production data has
+// exactly one domain (domain_id = 1 everywhere), same assumption already
+// documented in clients_to_contacts.recon.md.
+const botMappingDomainID = 1
 
-// loadBotMapping returns a nil map, no error, when c.botMappingTable is unset -- the
-// mapped-bot lookup downstream then always misses, so the feature is a no-op. Mapped
-// new_bot_id values are trusted as-is, never validated against existing contacts. The
-// schema.table split is already validated at config load (main.go's mustLoadConfig);
-// repeating it here is defensive, not load-bearing.
-func (c *Converter) loadBotMapping(ctx context.Context) (map[string]uuid.UUID, error) {
-	if c.botMappingTable == "" {
-		return nil, nil
-	}
-	schema, table, ok := strings.Cut(c.botMappingTable, ".")
-	if !ok || schema == "" || table == "" {
-		return nil, fmt.Errorf("invalid MIGRATION_BOT_MAPPING_TABLE %q: expected \"schema.table\"", c.botMappingTable)
-	}
-	rows, err := c.newDB.BotMappingStore().GetAll(ctx, schema, table)
-	if err != nil {
-		return nil, err
-	}
-	mapping := make(map[string]uuid.UUID, len(rows))
-	for _, r := range rows {
-		oldID := strconv.Itoa(r.OldBotID)
-		if _, exists := mapping[oldID]; exists {
-			c.log.Warn("duplicate old_bot_id in bot mapping table, last row wins",
-				"old_bot_id", r.OldBotID, "table", c.botMappingTable)
-		}
-		mapping[oldID] = r.NewBotID
-	}
-	return mapping, nil
-}
-
-// NOTE: MigrationRow old_id = flow_id, new_id = contact_id
+// MigrateBotsToContacts does not create bot contacts: those are configured
+// manually in new_db before migration. It only writes chat_migration rows
+// mapping each public.bot_mapping.old_bot_id (the old flow_id) to its
+// new_bot_id, so downstream steps (members, messages) can resolve
+// flow_id -> contact_id. Full mode only; see MigrateBotsToContactsSyncMode.
 func (c *Converter) MigrateBotsToContacts(ctx context.Context) error {
-	const perPage = 1000
 	c.log.Debug("starting bots-to-contacts migration")
 
-	startOffset, err := c.newDB.MigrationStore().GetStepProgress(ctx, StepBotsToContacts)
+	if err := c.newDB.MigrationStore().CheckAllStepsCompleted(ctx); err != nil {
+		return err
+	}
+
+	completedSteps, err := c.newDB.MigrationStore().GetCompletedSteps(ctx, c.sessionID)
 	if err != nil {
 		return err
 	}
-	if startOffset > 0 {
-		c.log.Info("resuming bots-to-contacts migration", "startOffset", startOffset)
+	if _, ok := completedSteps[StepClientsToContacts]; !ok {
+		return fmt.Errorf("step %q requires step %q to be completed first", StepBotsToContacts, StepClientsToContacts)
+	}
+	if c.migratePortalClients {
+		if _, ok := completedSteps[StepPortalClientsToContacts]; !ok {
+			return fmt.Errorf("step %q requires step %q to be completed first", StepBotsToContacts, StepPortalClientsToContacts)
+		}
 	}
 
-	lastCommittedOffset := startOffset
+	if err := c.newDB.MigrationStore().MarkStepInProgress(ctx, c.sessionID, StepBotsToContacts); err != nil {
+		return err
+	}
+
 	fail := func(cause error) error {
-		_ = c.newDB.MigrationStore().MarkStepFailed(ctx, StepBotsToContacts, lastCommittedOffset, cause.Error())
+		_ = c.newDB.MigrationStore().MarkStepFailed(ctx, c.sessionID, StepBotsToContacts, 0, cause.Error())
 		return cause
 	}
 
-	botMapping, err := c.loadBotMapping(ctx)
-	if err != nil {
-		return err
-	}
-	err = PagerFunc(ctx, perPage, func(ctx context.Context, offset, limit int) (bool, error) {
-		absOffset := offset + startOffset
-
-		tx, err := c.newDB.Pool().Begin(ctx)
-		if err != nil {
-			return false, err
-		}
-
-		iterate := true
-		bots, err := c.oldDB.BotStore().Get(ctx, absOffset, limit)
-		if err != nil {
-			tx.Rollback(ctx)
-			return false, err
-		}
-		if len(bots) < limit {
-			iterate = false
-		}
-		c.log.Debug("bots page fetched", "offset", absOffset, "count", len(bots))
-		var (
-			contacts      []*modelnew.Contact
-			migrationRows []*modelnew.MigrationRow
-		)
-		for _, bot := range bots {
-			oldID := strconv.Itoa(bot.FlowID)
-			if newBotID, mapped := botMapping[oldID]; mapped {
-				migrationRows = append(migrationRows, &modelnew.MigrationRow{
-					ID:         uuid.New(),
-					EntityType: modelnew.EntityTypeBotContact,
-					OldID:      oldID,
-					NewID:      newBotID,
-					DomainID:   bot.DC,
-				})
-				continue
-			}
-			converted, migrationRow := convertBotToContact(bot)
-			contacts = append(contacts, converted)
-			migrationRows = append(migrationRows, migrationRow)
-		}
-		if err := c.newDB.ContactStore().InsertContacts(ctx, tx, contacts); err != nil {
-			tx.Rollback(ctx)
-			return false, err
-		}
-		if err := c.newDB.MigrationStore().InsertMigrations(ctx, tx, migrationRows); err != nil {
-			tx.Rollback(ctx)
-			return false, err
-		}
-
-		if err := c.newDB.MigrationStore().SaveStepProgressInTx(ctx, tx, StepBotsToContacts, absOffset+limit); err != nil {
-			tx.Rollback(ctx)
-			return false, err
-		}
-
-		if err := tx.Commit(ctx); err != nil {
-			return false, err
-		}
-		lastCommittedOffset = absOffset + limit
-
-		c.addRecordsMigrated(len(contacts))
-		return iterate, nil
-	})
+	mappings, err := c.newDB.BotMappingStore().GetAll(ctx, "public", "bot_mapping")
 	if err != nil {
 		return fail(err)
 	}
+
+	migrationRows := make([]*modelnew.MigrationRow, 0, len(mappings))
+	for _, m := range mappings {
+		migrationRows = append(migrationRows, &modelnew.MigrationRow{
+			ID:         uuid.New(),
+			EntityType: modelnew.EntityTypeBotContact,
+			OldID:      strconv.Itoa(m.OldBotID),
+			NewID:      m.NewBotID,
+			DomainID:   botMappingDomainID,
+		})
+	}
+
+	tx, err := c.newDB.Pool().Begin(ctx)
+	if err != nil {
+		return fail(err)
+	}
+
+	if err := c.newDB.MigrationStore().InsertMigrations(ctx, tx, c.sessionID, migrationRows); err != nil {
+		tx.Rollback(ctx)
+		return fail(err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fail(err)
+	}
+
+	c.addRecordsMigrated(len(migrationRows))
 	return nil
 }
 
+// MigrateBotsToContactsSyncMode is a no-op: bots are linked once, in full
+// mode, from public.bot_mapping -- there is nothing new to pick up on a sync
+// run.
 func (c *Converter) MigrateBotsToContactsSyncMode(ctx context.Context) error {
-	const perPage = 1000
-	c.log.Debug("starting bots-to-contacts migration in sync mode")
-
-	startOffset, err := c.newDB.MigrationStore().GetStepProgress(ctx, SyncStepBotsToContacts)
-	if err != nil {
-		return err
-	}
-	botMapping, err := c.loadBotMapping(ctx)
-	if err != nil {
-		return err
-	}
-	completedAt, err := c.GetStepCompletedAt(ctx, SyncStepBotsToContacts)
-	if err != nil {
-		return err
-	}
-	if startOffset > 0 {
-		c.log.Info("resuming bots-to-contacts migration", "startOffset", startOffset)
-	}
-
-	lastCommittedOffset := startOffset
-	fail := func(cause error) error {
-		_ = c.newDB.MigrationStore().MarkStepFailed(ctx, SyncStepBotsToContacts, lastCommittedOffset, cause.Error())
-		return cause
-	}
-
-	err = PagerFunc(ctx, perPage, func(ctx context.Context, offset, limit int) (bool, error) {
-		absOffset := offset + startOffset
-
-		tx, err := c.newDB.Pool().Begin(ctx)
-		if err != nil {
-			return false, err
-		}
-
-		iterate := true
-		bots, err := c.oldDB.BotStore().GetFromDate(ctx, absOffset, limit, &completedAt)
-		if err != nil {
-			tx.Rollback(ctx)
-			return false, err
-		}
-		if len(bots) < limit {
-			iterate = false
-		}
-		c.log.Debug("bots page fetched", "offset", absOffset, "count", len(bots))
-		var (
-			contacts      []*modelnew.Contact
-			migrationRows []*modelnew.MigrationRow
-		)
-		for _, bot := range bots {
-			oldID := strconv.Itoa(bot.FlowID)
-			if newBotID, mapped := botMapping[oldID]; mapped {
-				migrationRows = append(migrationRows, &modelnew.MigrationRow{
-					ID:         uuid.New(),
-					EntityType: modelnew.EntityTypeBotContact,
-					OldID:      oldID,
-					NewID:      newBotID,
-					DomainID:   bot.DC,
-				})
-				continue
-			}
-			converted, migrationRow := convertBotToContact(bot)
-			contacts = append(contacts, converted)
-			migrationRows = append(migrationRows, migrationRow)
-		}
-		rowsAffected, err := c.newDB.ContactStore().InsertContactsIgnoreConflicts(ctx, tx, contacts)
-		if err != nil {
-			tx.Rollback(ctx)
-			return false, err
-		}
-
-		if err := c.newDB.MigrationStore().InsertMigrations(ctx, tx, migrationRows); err != nil {
-			tx.Rollback(ctx)
-			return false, err
-		}
-
-		if err := c.newDB.MigrationStore().SaveStepProgressInTx(ctx, tx, SyncStepBotsToContacts, absOffset+limit); err != nil {
-			tx.Rollback(ctx)
-			return false, err
-		}
-
-		if err := tx.Commit(ctx); err != nil {
-			return false, err
-		}
-		lastCommittedOffset = absOffset + limit
-
-		c.addRecordsMigrated(int(rowsAffected))
-		return iterate, nil
-	})
-	if err != nil {
-		return fail(err)
-	}
+	c.log.Info("bots-to-contacts sync step is a no-op; bots are migrated once in full mode from public.bot_mapping")
 	return nil
-}
-
-func convertBotToContact(bot *old.Bot) (*modelnew.Contact, *modelnew.MigrationRow) {
-	res := &modelnew.Contact{
-		BaseModel: modelnew.BaseModel{
-			ID:        uuid.New(),
-			DomainID:  bot.DC,
-			CreatedAt: bot.CreatedAt,
-			UpdatedAt: bot.UpdatedAt,
-		},
-		IssuerID:  BotIssuerID,
-		SubjectID: strconv.Itoa(bot.FlowID),
-		Type:      "bot",
-		Name:      bot.Name,
-		Username:  strings.ToLower(strings.Replace(bot.Name, " ", "_", -1)),
-		IsBot:     true,
-	}
-	migrationRow := &modelnew.MigrationRow{
-		ID:         uuid.New(),
-		EntityType: modelnew.EntityTypeBotContact,
-		OldID:      strconv.Itoa(bot.FlowID),
-		NewID:      res.ID,
-		DomainID:   bot.DC,
-	}
-
-	return res, migrationRow
 }

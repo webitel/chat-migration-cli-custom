@@ -37,6 +37,7 @@ func (s *MessageStore) GetMessagesByConversationID(ctx context.Context, conversa
 FROM chat.message m
 LEFT JOIN chat.channel ch ON ch.id = m.channel_id
 WHERE m.conversation_id = ANY ($1)
+  AND m.text IS DISTINCT FROM 'start'
 ORDER BY m.created_at`
 		messages []*old.Message
 	)

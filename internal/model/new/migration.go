@@ -15,7 +15,6 @@ const (
 	EntityTypeMessage                      EntityType = "message"
 	EntityTypeGatewayToContact             EntityType = "gateway_to_contact"
 	EntityTypeProviderToGateway            EntityType = "provider_to_gateway"
-	EntityTypeProviderToMetaApp            EntityType = "provider_to_meta_app"
 	EntityTypePortalAppAccount             EntityType = "portal_app_account"
 )
 
@@ -35,4 +34,5 @@ type MigrationRow struct {
 	NewID      uuid.UUID  `db:"new_id"`
 	DomainID   int        `db:"domain_id"`
 	ExtraKey   *string    `db:"extra_key"`
+	SessionID  uuid.UUID  `db:"session_id"`
 }

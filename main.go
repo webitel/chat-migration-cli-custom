@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/viper"
+	"github.com/webitel/chat-migration-cli/internal/buildinfo"
 	"github.com/webitel/chat-migration-cli/internal/service"
 	"github.com/webitel/chat-migration-cli/internal/store/newdb"
 	"github.com/webitel/chat-migration-cli/internal/store/olddb"
@@ -29,14 +32,35 @@ type config struct {
 	EncryptionKey        string     // required: 32-byte AES-256 key for encrypting tokens
 	Sync                 bool       // SYNC_MODE
 	MigratePortalClients bool       // MIGRATE_PORTAL_CLIENTS
-	BotMappingTable      string     // BOT_MAPPING_TABLE: schema.table; optional, empty disables pre-existing bot mapping
+	PortalChatIssuerID   string     // PORTAL_CHAT_ISSUER_ID: required if MIGRATE_PORTAL_CLIENTS is enabled
+	SessionID            uuid.UUID  // required: SESSION_ID, identifies the records created by this migration cycle
 }
 
 func main() {
+	initMode := flag.Bool("init", false, "create the tables required to run a migration in the new DB, then exit")
+	versionMode := flag.Bool("version", false, "print version information and exit")
+	flag.Parse()
+
+	if *versionMode {
+		printVersion()
+		return
+	}
+
+	if *initMode {
+		runInitMode()
+		return
+	}
+
 	cfg := mustLoadConfig()
 
 	log := buildLogger(cfg.LogLevel, cfg.LogJSON)
 	slog.SetDefault(log)
+
+	log.Info("starting chat migration",
+		"version", buildinfo.Version,
+		"build", buildinfo.BuildNumber,
+		"commit", buildinfo.GitCommit,
+	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -63,9 +87,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	dstDB, err := newdb.New(newPool, cfg.MigratePortalClients)
-	if err != nil {
-		log.Error("destination DB init failed", "error", err)
+	dstDB := newdb.New(newPool)
+
+	if err := dstDB.CheckTablesExist(ctx); err != nil {
+		log.Error("required tables are missing", "error", err)
 		os.Exit(1)
 	}
 
@@ -75,7 +100,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	converter := service.NewConverter(srcDB, dstDB, encryptor, cfg.Sync, cfg.MigratePortalClients, cfg.BotMappingTable)
+	log.Info("migration session started", "session_id", cfg.SessionID)
+
+	converter := service.NewConverter(srcDB, dstDB, encryptor, cfg.Sync, cfg.MigratePortalClients, cfg.PortalChatIssuerID, cfg.SessionID)
 
 	var runErr error
 	switch {
@@ -97,6 +124,62 @@ func main() {
 	log.Info("migration completed")
 }
 
+// printVersion prints version and local build information and exits without
+// touching configuration or any database.
+func printVersion() {
+	fmt.Printf("chat-migration-cli %s\n", buildinfo.Full())
+	fmt.Printf("commit: %s\n", buildinfo.GitCommit)
+	fmt.Printf("built: %s\n", buildinfo.BuildTime)
+}
+
+// runInitMode creates the tables required to run a migration in the new DB
+// and exits. Only MIGRATION_NEW_DB_DSN is required; every other MIGRATION_*
+// variable is ignored.
+func runInitMode() {
+	v := viper.New()
+	v.SetEnvPrefix("MIGRATION")
+	v.AutomaticEnv()
+
+	v.SetDefault("NEW_DB_MAX_CONNS", 10)
+	v.SetDefault("LOG_LEVEL", "info")
+	v.SetDefault("LOG_JSON", false)
+
+	log := buildLogger(parseLogLevel(v.GetString("LOG_LEVEL")), v.GetBool("LOG_JSON"))
+	slog.SetDefault(log)
+
+	newDSN := v.GetString("NEW_DB_DSN")
+	if newDSN == "" {
+		log.Error("MIGRATION_NEW_DB_DSN is required")
+		os.Exit(1)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	newPool, err := buildPool(ctx, newDSN, int32(v.GetInt("NEW_DB_MAX_CONNS")))
+	if err != nil {
+		log.Error("new DB connection failed", "error", err)
+		os.Exit(1)
+	}
+	defer newPool.Close()
+
+	dstDB := newdb.New(newPool)
+	if err := dstDB.InitTables(ctx); err != nil {
+		log.Error("failed to initialize tables", "error", err)
+		os.Exit(1)
+	}
+
+	log.Info("required tables initialized")
+}
+
+func parseLogLevel(value string) slog.Level {
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(value)); err != nil {
+		return slog.LevelInfo
+	}
+	return level
+}
+
 func mustLoadConfig() config {
 	v := viper.New()
 	v.SetEnvPrefix("MIGRATION")
@@ -110,7 +193,7 @@ func mustLoadConfig() config {
 	v.SetDefault("SINGLE_STEP", false)
 	v.SetDefault("SYNC_MODE", false)
 	v.SetDefault("MIGRATE_PORTAL_CLIENTS", false)
-	v.SetDefault("BOT_MAPPING_TABLE", "")
+	v.SetDefault("PORTAL_CHAT_ISSUER_ID", "")
 
 	oldDSN := v.GetString("OLD_DB_DSN")
 	newDSN := v.GetString("NEW_DB_DSN")
@@ -134,19 +217,26 @@ func mustLoadConfig() config {
 		os.Exit(1)
 	}
 
-	var level slog.Level
-	if err := level.UnmarshalText([]byte(v.GetString("LOG_LEVEL"))); err != nil {
-		level = slog.LevelInfo
+	level := parseLogLevel(v.GetString("LOG_LEVEL"))
+
+	migratePortalClients := v.GetBool("MIGRATE_PORTAL_CLIENTS")
+	portalChatIssuerID := v.GetString("PORTAL_CHAT_ISSUER_ID")
+	if migratePortalClients && portalChatIssuerID == "" {
+		slog.Error("MIGRATION_PORTAL_CHAT_ISSUER_ID is required when MIGRATION_MIGRATE_PORTAL_CLIENTS is enabled")
+		os.Exit(1)
 	}
 
-	botMappingTable := v.GetString("BOT_MAPPING_TABLE")
-	if botMappingTable != "" {
-		schema, table, ok := strings.Cut(botMappingTable, ".")
-		if !ok || strings.TrimSpace(schema) == "" || strings.TrimSpace(table) == "" {
-			slog.Error("MIGRATION_BOT_MAPPING_TABLE must be in \"schema.table\" format", "value", botMappingTable)
-			os.Exit(1)
-		}
+	sessionIDRaw := v.GetString("SESSION_ID")
+	if sessionIDRaw == "" {
+		slog.Error("MIGRATION_SESSION_ID is required")
+		os.Exit(1)
 	}
+	sessionID, err := uuid.Parse(sessionIDRaw)
+	if err != nil {
+		slog.Error("MIGRATION_SESSION_ID must be a valid UUID", "error", err)
+		os.Exit(1)
+	}
+
 	return config{
 		OldDBDSN:             oldDSN,
 		NewDBDSN:             newDSN,
@@ -158,8 +248,9 @@ func mustLoadConfig() config {
 		LogJSON:              v.GetBool("LOG_JSON"),
 		EncryptionKey:        encryptionKey,
 		Sync:                 v.GetBool("SYNC_MODE"),
-		MigratePortalClients: v.GetBool("MIGRATE_PORTAL_CLIENTS"),
-		BotMappingTable:      botMappingTable,
+		MigratePortalClients: migratePortalClients,
+		PortalChatIssuerID:   portalChatIssuerID,
+		SessionID:            sessionID,
 	}
 }
 

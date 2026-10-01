@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -19,26 +20,51 @@ func (c *Converter) MigrateConversations(ctx context.Context) error {
 	const perPage = 1000
 	c.log.Debug("starting conversations migration")
 
-	lastInitiator, lastFlowID, err := c.newDB.MigrationStore().GetCursorProgress(ctx, StepConversations)
+	if err := c.newDB.MigrationStore().CheckAllStepsCompleted(ctx); err != nil {
+		return err
+	}
+
+	completedSteps, err := c.newDB.MigrationStore().GetCompletedSteps(ctx, c.sessionID)
 	if err != nil {
 		return err
 	}
-	if lastInitiator > 0 || lastFlowID > 0 {
-		c.log.Info("resuming conversations migration", "lastInitiator", lastInitiator, "lastFlowID", lastFlowID)
+	deps := []string{StepClientsToContacts, StepBotsToContacts}
+	if c.migratePortalClients {
+		deps = append(deps, StepPortalClientsToContacts)
+	}
+	for _, dep := range deps {
+		if _, ok := completedSteps[dep]; !ok {
+			return fmt.Errorf("step %q requires step %q to be completed first", StepConversations, dep)
+		}
+	}
+
+	flowIDs, err := c.getConversationFlowIDs(ctx)
+	if err != nil {
+		return err
+	}
+
+	fromDate, toDate, err := c.GetMigrationWindow(ctx)
+	if err != nil {
+		return err
+	}
+
+	if err := c.newDB.MigrationStore().MarkStepInProgress(ctx, c.sessionID, StepConversations); err != nil {
+		return err
 	}
 
 	fail := func(cause error) error {
-		_ = c.newDB.MigrationStore().MarkStepFailed(ctx, StepConversations, 0, cause.Error())
+		_ = c.newDB.MigrationStore().MarkStepFailed(ctx, c.sessionID, StepConversations, 0, cause.Error())
 		return cause
 	}
 
+	lastInitiator, lastFlowID := 0, 0
 	for {
 		tx, err := c.newDB.Pool().Begin(ctx)
 		if err != nil {
 			return fail(err)
 		}
 
-		groupedConversations, err := c.oldDB.ConversationStore().GetGroupedConversationsByUsersAndFlow(ctx, lastInitiator, lastFlowID, perPage)
+		groupedConversations, err := c.oldDB.ConversationStore().GetGroupedConversationsByUsersAndFlowFromDate(ctx, lastInitiator, lastFlowID, perPage, fromDate, toDate, flowIDs)
 		if err != nil {
 			tx.Rollback(ctx)
 			return fail(err)
@@ -78,7 +104,7 @@ func (c *Converter) MigrateConversations(ctx context.Context) error {
 			tx.Rollback(ctx)
 			return fail(err)
 		}
-		if err := c.newDB.MigrationStore().InsertMigrations(ctx, tx, migrationRows); err != nil {
+		if err := c.newDB.MigrationStore().InsertMigrations(ctx, tx, c.sessionID, migrationRows); err != nil {
 			tx.Rollback(ctx)
 			return fail(err)
 		}
@@ -92,11 +118,6 @@ func (c *Converter) MigrateConversations(ctx context.Context) error {
 			}
 		}
 		lastInitiator, lastFlowID = maxInitiator, maxFlowID
-
-		if err := c.newDB.MigrationStore().SaveCursorProgressInTx(ctx, tx, StepConversations, lastInitiator, lastFlowID); err != nil {
-			tx.Rollback(ctx)
-			return fail(err)
-		}
 
 		if err := tx.Commit(ctx); err != nil {
 			return fail(err)
@@ -134,51 +155,68 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 	)
 	c.log.Debug("starting conversations migration")
 
-	lastInitiator, lastFlowID, err := c.newDB.MigrationStore().GetCursorProgress(ctx, stepName)
+	if err := c.newDB.MigrationStore().CheckAllStepsCompleted(ctx); err != nil {
+		return err
+	}
+
+	completedSteps, err := c.newDB.MigrationStore().GetCompletedSteps(ctx, c.sessionID)
 	if err != nil {
 		return err
 	}
-	isResuming := lastInitiator > 0 || lastFlowID > 0
-	if isResuming {
-		c.log.Info("resuming conversations migration", "lastInitiator", lastInitiator, "lastFlowID", lastFlowID)
-	} else {
-		// Run NullifyMigrationRowsExtraKey in a separate transaction, but only on a
-		// fresh start. If we're resuming, a prior run of this step already committed
-		// some pages tagged with newThreadAfterSyncExtraKey; nullifying now would wipe
-		// those tags without ever re-tagging them (their conversations are already
-		// migrated and won't be seen again), which makes MigrateMembersSyncMode build
-		// the wrong dialog set for those threads.
-		nullifyTx, err := c.newDB.Pool().Begin(ctx)
-		if err != nil {
-			return err
-		}
-		err = c.newDB.MigrationStore().NullifyMigrationRowsExtraKey(ctx, nullifyTx, newThreadAfterSyncExtraKey, string(modelnew.EntityTypeFlowIDAndInitiatorIDToThread))
-		if err != nil {
-			nullifyTx.Rollback(ctx)
-			return err
-		}
-		if err := nullifyTx.Commit(ctx); err != nil {
-			return err
+	syncDeps := []string{SyncStepClientsToContacts}
+	if c.migratePortalClients {
+		syncDeps = append(syncDeps, SyncStepPortalClientsToContacts)
+	}
+	for _, dep := range syncDeps {
+		if _, ok := completedSteps[dep]; !ok {
+			return fmt.Errorf("step %q requires step %q to be completed first", stepName, dep)
 		}
 	}
 
-	completedAt, err := c.GetStepCompletedAt(ctx, stepName)
+	flowIDs, err := c.getConversationFlowIDs(ctx)
 	if err != nil {
+		return err
+	}
+
+	if err := c.newDB.MigrationStore().MarkStepInProgress(ctx, c.sessionID, stepName); err != nil {
 		return err
 	}
 
 	fail := func(cause error) error {
-		_ = c.newDB.MigrationStore().MarkStepFailed(ctx, stepName, 0, cause.Error())
+		_ = c.newDB.MigrationStore().MarkStepFailed(ctx, c.sessionID, stepName, 0, cause.Error())
 		return cause
 	}
 
+	// Unconditional: since the step no longer resumes, every invocation is a
+	// fresh one -- there's no longer a "resuming this same run" case where
+	// nullifying now would wipe tags this run already produced. Clear the
+	// tag left by the last successfully completed sync run before tagging
+	// this run's newly created threads.
+	nullifyTx, err := c.newDB.Pool().Begin(ctx)
+	if err != nil {
+		return fail(err)
+	}
+	if err := c.newDB.MigrationStore().NullifyMigrationRowsExtraKey(ctx, nullifyTx, newThreadAfterSyncExtraKey, string(modelnew.EntityTypeFlowIDAndInitiatorIDToThread)); err != nil {
+		nullifyTx.Rollback(ctx)
+		return fail(err)
+	}
+	if err := nullifyTx.Commit(ctx); err != nil {
+		return fail(err)
+	}
+
+	fromDate, toDate, err := c.GetMigrationWindow(ctx)
+	if err != nil {
+		return fail(err)
+	}
+
+	lastInitiator, lastFlowID := 0, 0
 	for {
 		tx, err := c.newDB.Pool().Begin(ctx)
 		if err != nil {
 			return fail(err)
 		}
 
-		groupedConversations, err := c.oldDB.ConversationStore().GetGroupedConversationsByUsersAndFlowFromDate(ctx, lastInitiator, lastFlowID, perPage, completedAt)
+		groupedConversations, err := c.oldDB.ConversationStore().GetGroupedConversationsByUsersAndFlowFromDate(ctx, lastInitiator, lastFlowID, perPage, fromDate, toDate, flowIDs)
 		if err != nil {
 			tx.Rollback(ctx)
 			return fail(err)
@@ -276,18 +314,13 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 			tx.Rollback(ctx)
 			return fail(err)
 		}
-		if err := c.newDB.MigrationStore().InsertMigrations(ctx, tx, migrationRows); err != nil {
+		if err := c.newDB.MigrationStore().InsertMigrations(ctx, tx, c.sessionID, migrationRows); err != nil {
 			tx.Rollback(ctx)
 			return fail(err)
 		}
 
 		// advance cursor to the max group on this page (computed above, before dedup)
 		lastInitiator, lastFlowID = maxInitiator, maxFlowID
-
-		if err := c.newDB.MigrationStore().SaveCursorProgressInTx(ctx, tx, stepName, lastInitiator, lastFlowID); err != nil {
-			tx.Rollback(ctx)
-			return fail(err)
-		}
 
 		if err := tx.Commit(ctx); err != nil {
 			return fail(err)

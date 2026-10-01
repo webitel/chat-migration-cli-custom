@@ -2,9 +2,12 @@ package newdb
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	modelnew "github.com/webitel/chat-migration-cli/internal/model/new"
 )
 
@@ -75,11 +78,24 @@ func (s *ThreadDialogStore) InsertThreadDialogs(ctx context.Context, tx pgx.Tx, 
 
 	_, err = tx.Exec(ctx, sql, args...)
 	if err != nil {
-		return err
+		return annotatePgError(err)
 	}
 	_, err = tx.Exec(ctx, sqlPermission, argsPermission...)
 	if err != nil {
-		return err
+		return annotatePgError(err)
 	}
 	return nil
+}
+
+// annotatePgError adds constraint/detail information from a Postgres error to
+// the returned error message. pgconn.PgError.Error() only includes the
+// message and SQLSTATE, not the constraint name or the DETAIL line (which
+// for a unique violation names the actual conflicting column values) --
+// those are needed to diagnose which row collided.
+func annotatePgError(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return fmt.Errorf("%w (constraint=%s, detail=%s)", err, pgErr.ConstraintName, pgErr.Detail)
+	}
+	return err
 }

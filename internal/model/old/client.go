@@ -31,5 +31,4 @@ type PortalClient struct {
 	Type      string     `db:"type"`
 	DomainID  int        `db:"dc"`
 	Sub       string     `db:"sub"`
-	Iss       string     `db:"iss"`
 }

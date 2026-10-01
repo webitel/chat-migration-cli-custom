@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -21,19 +20,44 @@ func (c *Converter) MigrateMembers(ctx context.Context) error {
 	)
 	c.log.Debug("starting members migration")
 
-	lastInitiator, lastFlowID, err := c.newDB.MigrationStore().GetCursorProgress(ctx, StepMembers)
+	if err := c.newDB.MigrationStore().CheckAllStepsCompleted(ctx); err != nil {
+		return err
+	}
+
+	completedSteps, err := c.newDB.MigrationStore().GetCompletedSteps(ctx, c.sessionID)
 	if err != nil {
 		return err
 	}
-	if lastInitiator > 0 || lastFlowID > 0 {
-		c.log.Info("resuming members migration", "lastInitiator", lastInitiator, "lastFlowID", lastFlowID)
+	deps := []string{StepClientsToContacts, StepBotsToContacts, StepConversations}
+	if c.migratePortalClients {
+		deps = append(deps, StepPortalClientsToContacts)
+	}
+	for _, dep := range deps {
+		if _, ok := completedSteps[dep]; !ok {
+			return fmt.Errorf("step %q requires step %q to be completed first", StepMembers, dep)
+		}
+	}
+
+	flowIDs, err := c.getConversationFlowIDs(ctx)
+	if err != nil {
+		return err
+	}
+
+	fromDate, toDate, err := c.GetMigrationWindow(ctx)
+	if err != nil {
+		return err
+	}
+
+	if err := c.newDB.MigrationStore().MarkStepInProgress(ctx, c.sessionID, StepMembers); err != nil {
+		return err
 	}
 
 	fail := func(cause error) error {
-		_ = c.newDB.MigrationStore().MarkStepFailed(ctx, StepMembers, 0, cause.Error())
+		_ = c.newDB.MigrationStore().MarkStepFailed(ctx, c.sessionID, StepMembers, 0, cause.Error())
 		return cause
 	}
 
+	lastInitiator, lastFlowID := 0, 0
 	for {
 		tx, err := c.newDB.Pool().Begin(ctx)
 		if err != nil {
@@ -45,7 +69,7 @@ func (c *Converter) MigrateMembers(ctx context.Context) error {
 			migrationRows  []*modelnew.MigrationRow
 			threadSettings []*modelnew.DirectSettings
 		)
-		groupedConversations, err := c.oldDB.ConversationStore().GetGroupedConversationsByUsersAndFlow(ctx, lastInitiator, lastFlowID, perPage)
+		groupedConversations, err := c.oldDB.ConversationStore().GetGroupedConversationsByUsersAndFlowFromDate(ctx, lastInitiator, lastFlowID, perPage, fromDate, toDate, flowIDs)
 		if err != nil {
 			tx.Rollback(ctx)
 			return fail(err)
@@ -70,10 +94,6 @@ func (c *Converter) MigrateMembers(ctx context.Context) error {
 			}
 			dialogs, settings, rows, err := c.buildThreadDialogsFromConversation(ctx, tx, groupedConv, thread.NewID)
 			if err != nil {
-				if errors.Is(err, errInitiatorNotFound) {
-					c.log.Warn("initiator not found, skipping", slog.String("error", err.Error()))
-					continue
-				}
 				tx.Rollback(ctx)
 				return fail(errors.Join(errors.New("failed to build thread dialogs from conversation"), err))
 			}
@@ -89,7 +109,7 @@ func (c *Converter) MigrateMembers(ctx context.Context) error {
 			tx.Rollback(ctx)
 			return fail(errors.Join(errors.New("failed to insert direct settings"), err))
 		}
-		if err := c.newDB.MigrationStore().InsertMigrations(ctx, tx, migrationRows); err != nil {
+		if err := c.newDB.MigrationStore().InsertMigrations(ctx, tx, c.sessionID, migrationRows); err != nil {
 			tx.Rollback(ctx)
 			return fail(errors.Join(errors.New("failed to insert migration rows for thread dialogs"), err))
 		}
@@ -103,11 +123,6 @@ func (c *Converter) MigrateMembers(ctx context.Context) error {
 			}
 		}
 		lastInitiator, lastFlowID = maxInitiator, maxFlowID
-
-		if err := c.newDB.MigrationStore().SaveCursorProgressInTx(ctx, tx, StepMembers, lastInitiator, lastFlowID); err != nil {
-			tx.Rollback(ctx)
-			return fail(err)
-		}
 
 		if err := tx.Commit(ctx); err != nil {
 			return fail(err)
@@ -129,24 +144,44 @@ func (c *Converter) MigrateMembersSyncMode(ctx context.Context) error {
 	)
 	c.log.Debug("starting members migration")
 
-	lastInitiator, lastFlowID, err := c.newDB.MigrationStore().GetCursorProgress(ctx, SyncStepMembers)
+	if err := c.newDB.MigrationStore().CheckAllStepsCompleted(ctx); err != nil {
+		return err
+	}
+
+	completedSteps, err := c.newDB.MigrationStore().GetCompletedSteps(ctx, c.sessionID)
 	if err != nil {
 		return err
 	}
-	if lastInitiator > 0 || lastFlowID > 0 {
-		c.log.Info("resuming members migration", "lastInitiator", lastInitiator, "lastFlowID", lastFlowID)
+	deps := []string{SyncStepClientsToContacts, SyncStepConversations}
+	if c.migratePortalClients {
+		deps = append(deps, SyncStepPortalClientsToContacts)
+	}
+	for _, dep := range deps {
+		if _, ok := completedSteps[dep]; !ok {
+			return fmt.Errorf("step %q requires step %q to be completed first", SyncStepMembers, dep)
+		}
 	}
 
-	completedAt, err := c.GetStepCompletedAt(ctx, SyncStepMembers)
+	fromDate, toDate, err := c.GetMigrationWindow(ctx)
 	if err != nil {
+		return err
+	}
+
+	flowIDs, err := c.getConversationFlowIDs(ctx)
+	if err != nil {
+		return err
+	}
+
+	if err := c.newDB.MigrationStore().MarkStepInProgress(ctx, c.sessionID, SyncStepMembers); err != nil {
 		return err
 	}
 
 	fail := func(cause error) error {
-		_ = c.newDB.MigrationStore().MarkStepFailed(ctx, SyncStepMembers, 0, cause.Error())
+		_ = c.newDB.MigrationStore().MarkStepFailed(ctx, c.sessionID, SyncStepMembers, 0, cause.Error())
 		return cause
 	}
 
+	lastInitiator, lastFlowID := 0, 0
 	for {
 		tx, err := c.newDB.Pool().Begin(ctx)
 		if err != nil {
@@ -158,7 +193,7 @@ func (c *Converter) MigrateMembersSyncMode(ctx context.Context) error {
 			threadSettings []*modelnew.DirectSettings
 			migrationRows  []*modelnew.MigrationRow
 		)
-		groupedConversations, err := c.oldDB.ConversationStore().GetGroupedConversationsByUsersAndFlowFromDate(ctx, lastInitiator, lastFlowID, perPage, completedAt)
+		groupedConversations, err := c.oldDB.ConversationStore().GetGroupedConversationsByUsersAndFlowFromDate(ctx, lastInitiator, lastFlowID, perPage, fromDate, toDate, flowIDs)
 		if err != nil {
 			tx.Rollback(ctx)
 			return fail(err)
@@ -193,10 +228,6 @@ func (c *Converter) MigrateMembersSyncMode(ctx context.Context) error {
 
 			dialogs, settings, rows, err = buildThreadDialogsFunc(ctx, tx, groupedConv, thread.NewID)
 			if err != nil {
-				if errors.Is(err, errInitiatorNotFound) {
-					c.log.Warn("initiator not found, skipping", slog.String("error", err.Error()))
-					continue
-				}
 				tx.Rollback(ctx)
 				return fail(errors.Join(errors.New("failed to build thread dialogs from conversation"), err))
 			}
@@ -215,7 +246,7 @@ func (c *Converter) MigrateMembersSyncMode(ctx context.Context) error {
 			return fail(errors.Join(errors.New("failed to insert direct settings"), err))
 		}
 
-		if err := c.newDB.MigrationStore().InsertMigrations(ctx, tx, migrationRows); err != nil {
+		if err := c.newDB.MigrationStore().InsertMigrations(ctx, tx, c.sessionID, migrationRows); err != nil {
 			tx.Rollback(ctx)
 			return fail(errors.Join(errors.New("failed to insert migration rows for thread dialogs"), err))
 		}
@@ -229,11 +260,6 @@ func (c *Converter) MigrateMembersSyncMode(ctx context.Context) error {
 			}
 		}
 		lastInitiator, lastFlowID = maxInitiator, maxFlowID
-
-		if err := c.newDB.MigrationStore().SaveCursorProgressInTx(ctx, tx, SyncStepMembers, lastInitiator, lastFlowID); err != nil {
-			tx.Rollback(ctx)
-			return fail(err)
-		}
 
 		if err := tx.Commit(ctx); err != nil {
 			return fail(err)
@@ -276,26 +302,15 @@ func (c *Converter) buildThreadDialogsFromConversation(ctx context.Context, tx p
 	return threadDialogs, threadSettings, migrationRows, nil
 }
 
-var errInitiatorNotFound = errors.New("initiator not found")
-
 func (c *Converter) buildOwnerThreadDialogFromConversation(ctx context.Context, tx pgx.Tx, conversation *old.GroupedConversation, newThreadID uuid.UUID) ([]*modelnew.ThreadDialog, []*modelnew.DirectSettings, []*modelnew.MigrationRow, error) {
 	initiatorContact, err := c.resolver.ResolveMigrationRow(ctx, tx, modelnew.EntityTypeClientContact, strconv.Itoa(conversation.Initiator), nil, conversation.DomainID)
 	if err != nil {
-		c.log.Error("failed to resolve initiator contact, probably client has been deleted", slog.String("error", err.Error()), slog.Int("initiator", conversation.Initiator), slog.Int("domain_id", conversation.DomainID))
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil, nil, errInitiatorNotFound
-		}
+		c.log.Error("failed to resolve initiator contact", slog.String("error", err.Error()), slog.Int("initiator", conversation.Initiator), slog.Int("domain_id", conversation.DomainID))
 		return nil, nil, nil, err
 	}
 	botContact, err := c.resolver.ResolveMigrationRow(ctx, tx, modelnew.EntityTypeBotContact, strconv.Itoa(conversation.FlowID), nil, conversation.DomainID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			botContact, err = c.restoreBotFromConversation(ctx, conversation, tx)
-			if err != nil {
-				c.log.Error("failed to restore bot from conversation", slog.Int("flow_id", conversation.FlowID), slog.Int("domain_id", conversation.DomainID))
-				return nil, nil, nil, errors.Join(errors.New("failed to restore bot from conversation"), err)
-			}
-		}
+		c.log.Error("failed to resolve bot contact", slog.String("error", err.Error()), slog.Int("flow_id", conversation.FlowID), slog.Int("domain_id", conversation.DomainID))
 		return nil, nil, nil, err
 	}
 
@@ -322,6 +337,7 @@ func (c *Converter) buildOwnerThreadDialogFromConversation(ctx context.Context, 
 		{
 			ID:             uuid.New(),
 			ThreadDialogID: initiatorDialog.ID,
+			DomainID:       conversation.DomainID,
 			Title:          conversation.Title,
 			CreatedAt:      now,
 			UpdatedAt:      now,
@@ -329,6 +345,7 @@ func (c *Converter) buildOwnerThreadDialogFromConversation(ctx context.Context, 
 		{
 			ID:             uuid.New(),
 			ThreadDialogID: botDialog.ID,
+			DomainID:       conversation.DomainID,
 			Title:          conversation.Title,
 			CreatedAt:      now,
 			UpdatedAt:      now,
@@ -357,53 +374,6 @@ func (c *Converter) buildOwnerThreadDialogFromConversation(ctx context.Context, 
 	}
 
 	return threadDialogs, threadSettings, migrationRows, nil
-}
-
-func (c *Converter) restoreBotFromConversation(ctx context.Context, conversation *old.GroupedConversation, tx pgx.Tx) (*modelnew.MigrationRow, error) {
-	var (
-		flowID = strconv.Itoa(conversation.FlowID)
-		now    = time.Now()
-		bot    *modelnew.Contact
-	)
-	bots, err := c.newDB.ContactStore().GetByFlowIDs(ctx, tx, []string{flowID})
-	if err != nil {
-		return nil, err
-	}
-	if len(bots) == 0 {
-		bot = &modelnew.Contact{
-			BaseModel: modelnew.BaseModel{
-				ID:        uuid.New(),
-				DomainID:  conversation.DomainID,
-				CreatedAt: now,
-				UpdatedAt: now,
-			},
-			IssuerID:  BotIssuerID,
-			SubjectID: flowID,
-			Type:      "bot",
-			Name:      fmt.Sprintf("Flow %d Bot", conversation.FlowID),
-			Username:  fmt.Sprintf("flow_%d_bot", conversation.FlowID),
-			IsBot:     true,
-		}
-		_, err := c.newDB.ContactStore().InsertContactsIgnoreConflicts(ctx, tx, []*modelnew.Contact{bot})
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		bot = bots[0]
-	}
-
-	migrationRow := &modelnew.MigrationRow{
-		ID:         uuid.New(),
-		EntityType: modelnew.EntityTypeBotContact,
-		OldID:      strconv.Itoa(conversation.FlowID),
-		NewID:      bot.ID,
-		DomainID:   conversation.DomainID,
-	}
-	err = c.newDB.MigrationStore().InsertMigrations(ctx, tx, []*modelnew.MigrationRow{migrationRow})
-	if err != nil {
-		return nil, err
-	}
-	return migrationRow, nil
 }
 
 func (c *Converter) buildInternalUsersThreadDialogs(ctx context.Context, tx pgx.Tx, conversation *old.GroupedConversation, threadID uuid.UUID) ([]*modelnew.ThreadDialog, []*modelnew.DirectSettings, []*modelnew.MigrationRow, error) {
@@ -438,9 +408,15 @@ func (c *Converter) buildInternalUsersThreadDialogs(ctx context.Context, tx pgx.
 			}
 		}
 
-		var deletedAt *time.Time
-		if !user.ClosedAt.IsZero() {
-			deletedAt = &user.ClosedAt
+		// Migration only ever processes closed conversations, so an internal
+		// user's membership is always over by migration time. old_db may still
+		// leave the channel's closed_at unset (the conversation was closed
+		// without explicitly closing the channel) — fall back to now so
+		// deleted_at is never NULL, matching idx_thread_dialog_member_unique
+		// (unique on (member_id, thread_id) WHERE deleted_at IS NULL).
+		closedAt := user.ClosedAt
+		if closedAt.IsZero() {
+			closedAt = now
 		}
 		threadDialog := &modelnew.ThreadDialog{
 			ID:          uuid.New(),
@@ -449,8 +425,8 @@ func (c *Converter) buildInternalUsersThreadDialogs(ctx context.Context, tx pgx.
 			ThreadRole:  modelnew.RoleMember,
 			DomainID:    conversation.DomainID,
 			CreatedAt:   user.CreatedAt,
-			UpdatedAt:   user.ClosedAt,
-			DeletedAt:   deletedAt,
+			UpdatedAt:   closedAt,
+			DeletedAt:   &closedAt,
 			LeaveReason: user.LeaveReason,
 		}
 		threadDialogs = append(threadDialogs, threadDialog)
@@ -458,6 +434,7 @@ func (c *Converter) buildInternalUsersThreadDialogs(ctx context.Context, tx pgx.
 		threadSettings = append(threadSettings, &modelnew.DirectSettings{
 			ID:             uuid.New(),
 			ThreadDialogID: threadDialog.ID,
+			DomainID:       conversation.DomainID,
 			Title:          conversation.Title,
 			CreatedAt:      now,
 			UpdatedAt:      now,
@@ -478,7 +455,7 @@ func (c *Converter) buildInternalUsersThreadDialogs(ctx context.Context, tx pgx.
 
 func (c *Converter) restoreWebitelUser(ctx context.Context, tx pgx.Tx, user *old.ConversationUser, threadID uuid.UUID, domainID int) (*modelnew.Contact, error) {
 	now := time.Now()
-	name := "Deleted user"
+	name := "Customer service"
 	if user.Name != nil {
 		name = *user.Name
 	}

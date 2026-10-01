@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -15,10 +16,28 @@ import (
 
 func (c *Converter) MigrateMessages(ctx context.Context) error {
 	const (
-		perPage         = 100
+		perPage         = 1000
 		insertChunkSize = 2000
 	)
 	c.log.Debug("starting messages migration")
+
+	if err := c.newDB.MigrationStore().CheckAllStepsCompleted(ctx, StepMessages); err != nil {
+		return err
+	}
+
+	completedSteps, err := c.newDB.MigrationStore().GetCompletedSteps(ctx, c.sessionID)
+	if err != nil {
+		return err
+	}
+	deps := []string{StepClientsToContacts, StepBotsToContacts, StepConversations, StepMembers}
+	if c.migratePortalClients {
+		deps = append(deps, StepPortalClientsToContacts)
+	}
+	for _, dep := range deps {
+		if _, ok := completedSteps[dep]; !ok {
+			return fmt.Errorf("step %q requires step %q to be completed first", StepMessages, dep)
+		}
+	}
 
 	lastInitiator, lastFlowID, err := c.newDB.MigrationStore().GetCursorProgress(ctx, StepMessages)
 	if err != nil {
@@ -28,8 +47,22 @@ func (c *Converter) MigrateMessages(ctx context.Context) error {
 		c.log.Info("resuming messages migration", "lastInitiator", lastInitiator, "lastFlowID", lastFlowID)
 	}
 
+	flowIDs, err := c.getConversationFlowIDs(ctx)
+	if err != nil {
+		return err
+	}
+
+	fromDate, toDate, err := c.GetMigrationWindow(ctx)
+	if err != nil {
+		return err
+	}
+
+	if err := c.newDB.MigrationStore().MarkStepInProgress(ctx, c.sessionID, StepMessages); err != nil {
+		return err
+	}
+
 	fail := func(cause error) error {
-		_ = c.newDB.MigrationStore().MarkStepFailed(ctx, StepMessages, 0, cause.Error())
+		_ = c.newDB.MigrationStore().MarkStepFailed(ctx, c.sessionID, StepMessages, 0, cause.Error())
 		return cause
 	}
 
@@ -39,7 +72,7 @@ func (c *Converter) MigrateMessages(ctx context.Context) error {
 			return fail(err)
 		}
 
-		threadIDToConv, err := c.getConversationMap(ctx, lastInitiator, lastFlowID, perPage, tx)
+		threadIDToConv, err := c.getConversationMap(ctx, lastInitiator, lastFlowID, perPage, tx, fromDate, toDate, flowIDs)
 		if err != nil {
 			tx.Rollback(ctx)
 			return fail(err)
@@ -49,7 +82,7 @@ func (c *Converter) MigrateMessages(ctx context.Context) error {
 			break
 		}
 
-		messages, files, err := c.migratePageMessages(ctx, tx, threadIDToConv)
+		messages, files, _, err := c.migratePageMessages(ctx, tx, threadIDToConv)
 		if err != nil {
 			tx.Rollback(ctx)
 			return fail(err)
@@ -72,7 +105,7 @@ func (c *Converter) MigrateMessages(ctx context.Context) error {
 		}
 		lastInitiator, lastFlowID = maxInitiator, maxFlowID
 
-		if err := c.newDB.MigrationStore().SaveCursorProgressInTx(ctx, tx, StepMessages, lastInitiator, lastFlowID); err != nil {
+		if err := c.newDB.MigrationStore().SaveCursorProgressInTx(ctx, tx, c.sessionID, StepMessages, lastInitiator, lastFlowID); err != nil {
 			tx.Rollback(ctx)
 			return fail(err)
 		}
@@ -93,11 +126,29 @@ func (c *Converter) MigrateMessages(ctx context.Context) error {
 
 func (c *Converter) MigrateMessagesSyncMode(ctx context.Context) error {
 	const (
-		perPage         = 100
+		perPage         = 1000
 		insertChunkSize = 2000
 		stepName        = SyncStepMessages
 	)
 	c.log.Debug("starting messages migration")
+
+	if err := c.newDB.MigrationStore().CheckAllStepsCompleted(ctx, stepName); err != nil {
+		return err
+	}
+
+	completedSteps, err := c.newDB.MigrationStore().GetCompletedSteps(ctx, c.sessionID)
+	if err != nil {
+		return err
+	}
+	deps := []string{SyncStepClientsToContacts, SyncStepConversations, SyncStepMembers}
+	if c.migratePortalClients {
+		deps = append(deps, SyncStepPortalClientsToContacts)
+	}
+	for _, dep := range deps {
+		if _, ok := completedSteps[dep]; !ok {
+			return fmt.Errorf("step %q requires step %q to be completed first", stepName, dep)
+		}
+	}
 
 	lastInitiator, lastFlowID, err := c.newDB.MigrationStore().GetCursorProgress(ctx, stepName)
 	if err != nil {
@@ -107,13 +158,22 @@ func (c *Converter) MigrateMessagesSyncMode(ctx context.Context) error {
 		c.log.Info("resuming messages migration", "lastInitiator", lastInitiator, "lastFlowID", lastFlowID)
 	}
 
-	completedAt, err := c.GetStepCompletedAt(ctx, stepName)
+	fromDate, toDate, err := c.GetMigrationWindow(ctx)
 	if err != nil {
 		return err
 	}
 
+	flowIDs, err := c.getConversationFlowIDs(ctx)
+	if err != nil {
+		return err
+	}
+
+	if err := c.newDB.MigrationStore().MarkStepInProgress(ctx, c.sessionID, stepName); err != nil {
+		return err
+	}
+
 	fail := func(cause error) error {
-		_ = c.newDB.MigrationStore().MarkStepFailed(ctx, stepName, 0, cause.Error())
+		_ = c.newDB.MigrationStore().MarkStepFailed(ctx, c.sessionID, stepName, 0, cause.Error())
 		return cause
 	}
 
@@ -123,7 +183,7 @@ func (c *Converter) MigrateMessagesSyncMode(ctx context.Context) error {
 			return fail(err)
 		}
 
-		threadIDToConv, err := c.getConversationMapSyncMode(ctx, lastInitiator, lastFlowID, perPage, tx, completedAt)
+		threadIDToConv, err := c.getConversationMapSyncMode(ctx, lastInitiator, lastFlowID, perPage, tx, fromDate, toDate, flowIDs)
 		if err != nil {
 			tx.Rollback(ctx)
 			return fail(err)
@@ -133,13 +193,18 @@ func (c *Converter) MigrateMessagesSyncMode(ctx context.Context) error {
 			break
 		}
 
-		messages, files, err := c.migratePageMessages(ctx, tx, threadIDToConv)
+		messages, files, migrationRows, err := c.migratePageMessages(ctx, tx, threadIDToConv)
 		if err != nil {
 			tx.Rollback(ctx)
 			return fail(err)
 		}
 
 		if err := c.insertChunked(ctx, tx, messages, files, insertChunkSize); err != nil {
+			tx.Rollback(ctx)
+			return fail(err)
+		}
+
+		if err := c.newDB.MigrationStore().InsertMigrations(ctx, tx, c.sessionID, migrationRows); err != nil {
 			tx.Rollback(ctx)
 			return fail(err)
 		}
@@ -156,7 +221,7 @@ func (c *Converter) MigrateMessagesSyncMode(ctx context.Context) error {
 		}
 		lastInitiator, lastFlowID = maxInitiator, maxFlowID
 
-		if err := c.newDB.MigrationStore().SaveCursorProgressInTx(ctx, tx, stepName, lastInitiator, lastFlowID); err != nil {
+		if err := c.newDB.MigrationStore().SaveCursorProgressInTx(ctx, tx, c.sessionID, stepName, lastInitiator, lastFlowID); err != nil {
 			tx.Rollback(ctx)
 			return fail(err)
 		}
@@ -197,8 +262,8 @@ func (c *Converter) insertChunked(ctx context.Context, tx pgx.Tx, messages []*mo
 	return nil
 }
 
-func (c *Converter) getConversationMap(ctx context.Context, lastInitiator, lastFlowID, limit int, tx pgx.Tx) (map[uuid.UUID]*modelold.GroupedConversation, error) {
-	conversations, err := c.oldDB.ConversationStore().GetGroupedConversationsByUsersAndFlow(ctx, lastInitiator, lastFlowID, limit)
+func (c *Converter) getConversationMap(ctx context.Context, lastInitiator, lastFlowID, limit int, tx pgx.Tx, from, to time.Time, flowIDs []int32) (map[uuid.UUID]*modelold.GroupedConversation, error) {
+	conversations, err := c.oldDB.ConversationStore().GetGroupedConversationsByUsersAndFlowFromDate(ctx, lastInitiator, lastFlowID, limit, from, to, flowIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -229,8 +294,8 @@ func (c *Converter) getConversationMap(ctx context.Context, lastInitiator, lastF
 	return threadIDToConv, nil
 }
 
-func (c *Converter) getConversationMapSyncMode(ctx context.Context, lastInitiator, lastFlowID, limit int, tx pgx.Tx, from time.Time) (map[uuid.UUID]*modelold.GroupedConversation, error) {
-	conversations, err := c.oldDB.ConversationStore().GetGroupedConversationsByUsersAndFlowFromDate(ctx, lastInitiator, lastFlowID, limit, from)
+func (c *Converter) getConversationMapSyncMode(ctx context.Context, lastInitiator, lastFlowID, limit int, tx pgx.Tx, from, to time.Time, flowIDs []int32) (map[uuid.UUID]*modelold.GroupedConversation, error) {
+	conversations, err := c.oldDB.ConversationStore().GetGroupedConversationsByUsersAndFlowFromDate(ctx, lastInitiator, lastFlowID, limit, from, to, flowIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -270,19 +335,20 @@ type pageSenderMaps struct {
 	botMembersByKey       map[string]uuid.UUID // "botIDStr:threadIDStr" → memberID
 }
 
-func (c *Converter) migratePageMessages(ctx context.Context, tx pgx.Tx, threadIDToConv map[uuid.UUID]*modelold.GroupedConversation) ([]*modelnew.Message, []*modelnew.MessageDocument, error) {
+func (c *Converter) migratePageMessages(ctx context.Context, tx pgx.Tx, threadIDToConv map[uuid.UUID]*modelold.GroupedConversation) ([]*modelnew.Message, []*modelnew.MessageDocument, []*modelnew.MigrationRow, error) {
 	messagesByConvID, err := c.batchFetchMessages(ctx, threadIDToConv)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	senderMaps, err := c.buildPageSenderMaps(ctx, tx, threadIDToConv)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	var (
-		allMessages []*modelnew.Message
-		allFiles    []*modelnew.MessageDocument
+		allMessages      []*modelnew.Message
+		allFiles         []*modelnew.MessageDocument
+		allMigrationRows []*modelnew.MigrationRow
 	)
 	for threadID, conv := range threadIDToConv {
 		var msgs []*modelold.Message
@@ -292,28 +358,31 @@ func (c *Converter) migratePageMessages(ctx context.Context, tx pgx.Tx, threadID
 
 		initiator, bot, operators := c.filterMessagesBySender(msgs)
 
-		converted, files, err := c.convertOperatorMessagesFromMaps(threadID, senderMaps, operators, conv.DomainID)
+		converted, files, migrationRows, err := c.convertOperatorMessagesFromMaps(threadID, senderMaps, operators, conv.DomainID)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		allMessages = append(allMessages, converted...)
 		allFiles = append(allFiles, files...)
+		allMigrationRows = append(allMigrationRows, migrationRows...)
 
 		initiatorID := strconv.Itoa(conv.Initiator)
 		contactID := senderMaps.initiatorContactsByID[initiatorID]
 		memberID := senderMaps.initiatorMembersByKey[initiatorID+":"+threadID.String()]
-		converted, files = c.buildMessagesForSender(threadID, contactID, memberID, initiator, conv.DomainID)
+		converted, files, migrationRows = c.buildMessagesForSender(threadID, contactID, memberID, initiator, conv.DomainID)
 		allMessages = append(allMessages, converted...)
 		allFiles = append(allFiles, files...)
+		allMigrationRows = append(allMigrationRows, migrationRows...)
 
 		botID := strconv.Itoa(conv.FlowID)
 		contactID = senderMaps.botContactsByID[botID]
 		memberID = senderMaps.botMembersByKey[botID+":"+threadID.String()]
-		converted, files = c.buildMessagesForSender(threadID, contactID, memberID, bot, conv.DomainID)
+		converted, files, migrationRows = c.buildMessagesForSender(threadID, contactID, memberID, bot, conv.DomainID)
 		allMessages = append(allMessages, converted...)
 		allFiles = append(allFiles, files...)
+		allMigrationRows = append(allMigrationRows, migrationRows...)
 	}
-	return allMessages, allFiles, nil
+	return allMessages, allFiles, allMigrationRows, nil
 }
 
 func (c *Converter) batchFetchMessages(ctx context.Context, threadIDToConv map[uuid.UUID]*modelold.GroupedConversation) (map[uuid.UUID][]*modelold.Message, error) {
@@ -449,10 +518,11 @@ func (c *Converter) buildPageSenderMaps(ctx context.Context, tx pgx.Tx, threadID
 	return result, nil
 }
 
-func (c *Converter) convertOperatorMessagesFromMaps(threadID uuid.UUID, maps *pageSenderMaps, messages []*modelold.Message, domainID int) ([]*modelnew.Message, []*modelnew.MessageDocument, error) {
+func (c *Converter) convertOperatorMessagesFromMaps(threadID uuid.UUID, maps *pageSenderMaps, messages []*modelold.Message, domainID int) ([]*modelnew.Message, []*modelnew.MessageDocument, []*modelnew.MigrationRow, error) {
 	var (
-		newMessages []*modelnew.Message
-		files       []*modelnew.MessageDocument
+		newMessages   []*modelnew.Message
+		files         []*modelnew.MessageDocument
+		migrationRows []*modelnew.MigrationRow
 	)
 	for _, oldMsg := range messages {
 		if oldMsg.UserID == nil {
@@ -461,36 +531,49 @@ func (c *Converter) convertOperatorMessagesFromMaps(threadID uuid.UUID, maps *pa
 		userIDStr := strconv.Itoa(*oldMsg.UserID)
 		contactID := maps.operatorContactsByID[userIDStr]
 		memberID := maps.operatorMembersByKey[userIDStr+":"+threadID.String()]
-		msg, file := c.buildMessage(threadID, contactID, memberID, oldMsg, domainID)
+		msg, file, migrationRow := c.buildMessage(threadID, contactID, memberID, oldMsg, domainID)
 		if file != nil {
 			files = append(files, file)
 		}
+		if migrationRow != nil {
+			migrationRows = append(migrationRows, migrationRow)
+		}
 		newMessages = append(newMessages, msg)
 	}
-	return newMessages, files, nil
+	return newMessages, files, migrationRows, nil
 }
 
-func (c *Converter) buildMessagesForSender(threadID, senderID, memberID uuid.UUID, messages []*modelold.Message, domainID int) ([]*modelnew.Message, []*modelnew.MessageDocument) {
+func (c *Converter) buildMessagesForSender(threadID, senderID, memberID uuid.UUID, messages []*modelold.Message, domainID int) ([]*modelnew.Message, []*modelnew.MessageDocument, []*modelnew.MigrationRow) {
 	var (
-		newMessages []*modelnew.Message
-		files       []*modelnew.MessageDocument
+		newMessages   []*modelnew.Message
+		files         []*modelnew.MessageDocument
+		migrationRows []*modelnew.MigrationRow
 	)
 	for _, oldMsg := range messages {
-		msg, file := c.buildMessage(threadID, senderID, memberID, oldMsg, domainID)
+		msg, file, migrationRow := c.buildMessage(threadID, senderID, memberID, oldMsg, domainID)
 		if file != nil {
 			files = append(files, file)
 		}
+		if migrationRow != nil {
+			migrationRows = append(migrationRows, migrationRow)
+		}
 		newMessages = append(newMessages, msg)
 	}
-	return newMessages, files
+	return newMessages, files, migrationRows
 }
 
-func (c *Converter) buildMessage(threadID, senderID, memberID uuid.UUID, oldMsg *modelold.Message, domainID int) (*modelnew.Message, *modelnew.MessageDocument) {
+// buildMessage also returns the chat_migration row mapping the old message
+// id to the new one, for text/file messages only (sync mode's reconciliation
+// needs it; system messages such as joined/closed aren't reconciled this
+// way). The caller decides whether to actually persist it -- full mode
+// discards it, see .md/enhancements/migration_steps/messages.md, "Добавить
+// запись в таблицу chat_migration".
+func (c *Converter) buildMessage(threadID, senderID, memberID uuid.UUID, oldMsg *modelold.Message, domainID int) (*modelnew.Message, *modelnew.MessageDocument, *modelnew.MigrationRow) {
 	var body string
 	if oldMsg.Text != nil {
 		body = *oldMsg.Text
 	}
-	var updatedAt time.Time
+	updatedAt := oldMsg.CreatedAt
 	if oldMsg.UpdatedAt != nil {
 		updatedAt = *oldMsg.UpdatedAt
 	}
@@ -524,7 +607,19 @@ func (c *Converter) buildMessage(threadID, senderID, memberID uuid.UUID, oldMsg 
 			newMsg.Interactive = &modelnew.MessageInteractive{Attachments: attachments}
 		}
 	}
-	return newMsg, file
+
+	var migrationRow *modelnew.MigrationRow
+	if messageType == modelnew.MessageTypeText || messageType == modelnew.MessageTypeFile {
+		migrationRow = &modelnew.MigrationRow{
+			ID:         uuid.New(),
+			EntityType: modelnew.EntityTypeMessage,
+			OldID:      strconv.FormatInt(oldMsg.ID, 10),
+			NewID:      newMsg.ID,
+			DomainID:   domainID,
+		}
+	}
+
+	return newMsg, file, migrationRow
 }
 
 func buildMetadata(text string) []byte {
@@ -572,6 +667,7 @@ func (c *Converter) convertMessageDocument(messageID uuid.UUID, oldMsg *modelold
 	var res = modelnew.MessageDocument{
 		ID:        uuid.New(),
 		MessageID: messageID,
+		CreatedAt: oldMsg.CreatedAt,
 	}
 	if oldMsg.FileID != nil {
 		res.FileID = *oldMsg.FileID
