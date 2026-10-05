@@ -3,11 +3,11 @@ package old
 import (
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/gofrs/uuid/v5"
 )
 
 type GroupedConversation struct {
-	ConvIDs       uuid.UUIDs          `db:"conv_ids"`
+	ConvIDs       []uuid.UUID         `db:"conv_ids"`
 	Initiator     int                 `db:"initiator"`
 	FlowID        int                 `db:"flow_id"`
 	Title         string              `db:"title"`

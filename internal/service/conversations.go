@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/gofrs/uuid/v5"
 	modelnew "github.com/webitel/chat-migration-cli-custom/internal/model/new"
 	"github.com/webitel/chat-migration-cli-custom/internal/model/old"
 )
@@ -83,7 +83,7 @@ func (c *Converter) MigrateConversations(ctx context.Context) error {
 			converted := convertGroupedConversationToThread(conversation)
 			for _, convID := range conversation.ConvIDs {
 				migrationRows = append(migrationRows, &modelnew.MigrationRow{
-					ID:         uuid.New(),
+					ID:         uuid.Must(uuid.NewV7()),
 					EntityType: modelnew.EntityTypeConversationThread,
 					OldID:      convID.String(),
 					NewID:      converted.ID,
@@ -91,7 +91,7 @@ func (c *Converter) MigrateConversations(ctx context.Context) error {
 				})
 			}
 			migrationRows = append(migrationRows, &modelnew.MigrationRow{
-				ID:         uuid.New(),
+				ID:         uuid.Must(uuid.NewV7()),
 				EntityType: modelnew.EntityTypeFlowIDAndInitiatorIDToThread,
 				OldID:      buildFlowIDAndInitiatorIdToThreadOldID(conversation.FlowID, conversation.Initiator),
 				NewID:      converted.ID,
@@ -268,7 +268,7 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 				if flowID == conv.FlowID && initiatorID == conv.Initiator && thread.DomainID == conv.DomainID {
 					for _, convID := range conv.ConvIDs {
 						migrationRows = append(migrationRows, &modelnew.MigrationRow{
-							ID:         uuid.New(),
+							ID:         uuid.Must(uuid.NewV7()),
 							EntityType: modelnew.EntityTypeConversationThread,
 							OldID:      convID.String(),
 							NewID:      thread.NewID,
@@ -291,7 +291,7 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 			converted := convertGroupedConversationToThread(conversation)
 			for _, convID := range conversation.ConvIDs {
 				migrationRows = append(migrationRows, &modelnew.MigrationRow{
-					ID:         uuid.New(),
+					ID:         uuid.Must(uuid.NewV7()),
 					EntityType: modelnew.EntityTypeConversationThread,
 					OldID:      convID.String(),
 					NewID:      converted.ID,
@@ -300,7 +300,7 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 			}
 			syncExtraKey := newThreadAfterSyncExtraKey
 			migrationRows = append(migrationRows, &modelnew.MigrationRow{
-				ID:         uuid.New(),
+				ID:         uuid.Must(uuid.NewV7()),
 				EntityType: modelnew.EntityTypeFlowIDAndInitiatorIDToThread,
 				OldID:      buildFlowIDAndInitiatorIdToThreadOldID(conversation.FlowID, conversation.Initiator),
 				NewID:      converted.ID,
@@ -338,7 +338,7 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 
 func convertGroupedConversationToThread(groupedConversation *old.GroupedConversation) *modelnew.Thread {
 	return &modelnew.Thread{
-		ID:        uuid.New(),
+		ID:        uuid.Must(uuid.NewV7()),
 		DomainID:  groupedConversation.DomainID,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),

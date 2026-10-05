@@ -1,6 +1,6 @@
 package new
 
-import "github.com/google/uuid"
+import "github.com/gofrs/uuid/v5"
 
 // PeerType is stored as an integer in JSONB peer columns (from, send_to)
 type PeerType int16

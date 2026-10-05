@@ -1,6 +1,6 @@
 package new
 
-import "github.com/google/uuid"
+import "github.com/gofrs/uuid/v5"
 
 // BotMapping mirrors a row of the client-managed public.bot_mapping table.
 // The tool never creates, seeds, or validates this table's contents against

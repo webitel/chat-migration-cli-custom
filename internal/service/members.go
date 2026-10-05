@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/gofrs/uuid/v5"
 	"github.com/jackc/pgx/v5"
 	modelnew "github.com/webitel/chat-migration-cli-custom/internal/model/new"
 	"github.com/webitel/chat-migration-cli-custom/internal/model/old"
@@ -316,7 +316,7 @@ func (c *Converter) buildOwnerThreadDialogFromConversation(ctx context.Context, 
 
 	now := time.Now()
 	initiatorDialog := &modelnew.ThreadDialog{
-		ID:         uuid.New(),
+		ID:         uuid.Must(uuid.NewV7()),
 		ThreadID:   newThreadID,
 		MemberID:   initiatorContact.NewID,
 		ThreadRole: modelnew.RoleOwner,
@@ -325,7 +325,7 @@ func (c *Converter) buildOwnerThreadDialogFromConversation(ctx context.Context, 
 		UpdatedAt:  now,
 	}
 	botDialog := &modelnew.ThreadDialog{
-		ID:         uuid.New(),
+		ID:         uuid.Must(uuid.NewV7()),
 		ThreadID:   newThreadID,
 		MemberID:   botContact.NewID,
 		ThreadRole: modelnew.RoleOwner,
@@ -335,7 +335,7 @@ func (c *Converter) buildOwnerThreadDialogFromConversation(ctx context.Context, 
 	}
 	threadSettings := []*modelnew.DirectSettings{
 		{
-			ID:             uuid.New(),
+			ID:             uuid.Must(uuid.NewV7()),
 			ThreadDialogID: initiatorDialog.ID,
 			DomainID:       conversation.DomainID,
 			Title:          conversation.Title,
@@ -343,7 +343,7 @@ func (c *Converter) buildOwnerThreadDialogFromConversation(ctx context.Context, 
 			UpdatedAt:      now,
 		},
 		{
-			ID:             uuid.New(),
+			ID:             uuid.Must(uuid.NewV7()),
 			ThreadDialogID: botDialog.ID,
 			DomainID:       conversation.DomainID,
 			Title:          conversation.Title,
@@ -356,7 +356,7 @@ func (c *Converter) buildOwnerThreadDialogFromConversation(ctx context.Context, 
 	newThreadIDStr := newThreadID.String()
 	migrationRows := []*modelnew.MigrationRow{
 		{
-			ID:         uuid.New(),
+			ID:         uuid.Must(uuid.NewV7()),
 			EntityType: modelnew.EntityTypeInitiatorChannelThreadDialog,
 			OldID:      strconv.Itoa(conversation.Initiator),
 			NewID:      initiatorDialog.ID,
@@ -364,7 +364,7 @@ func (c *Converter) buildOwnerThreadDialogFromConversation(ctx context.Context, 
 			ExtraKey:   &newThreadIDStr,
 		},
 		{
-			ID:         uuid.New(),
+			ID:         uuid.Must(uuid.NewV7()),
 			EntityType: modelnew.EntityTypeBotChannelThreadDialog,
 			OldID:      strconv.Itoa(conversation.FlowID),
 			NewID:      botDialog.ID,
@@ -419,7 +419,7 @@ func (c *Converter) buildInternalUsersThreadDialogs(ctx context.Context, tx pgx.
 			closedAt = now
 		}
 		threadDialog := &modelnew.ThreadDialog{
-			ID:          uuid.New(),
+			ID:          uuid.Must(uuid.NewV7AtTime(user.CreatedAt)),
 			ThreadID:    threadID,
 			MemberID:    foundContact.ID,
 			ThreadRole:  modelnew.RoleMember,
@@ -432,7 +432,7 @@ func (c *Converter) buildInternalUsersThreadDialogs(ctx context.Context, tx pgx.
 		threadDialogs = append(threadDialogs, threadDialog)
 
 		threadSettings = append(threadSettings, &modelnew.DirectSettings{
-			ID:             uuid.New(),
+			ID:             uuid.Must(uuid.NewV7()),
 			ThreadDialogID: threadDialog.ID,
 			DomainID:       conversation.DomainID,
 			Title:          conversation.Title,
@@ -441,7 +441,7 @@ func (c *Converter) buildInternalUsersThreadDialogs(ctx context.Context, tx pgx.
 		})
 		threadIDStr := threadID.String()
 		migrationRows = append(migrationRows, &modelnew.MigrationRow{
-			ID:         uuid.New(),
+			ID:         uuid.Must(uuid.NewV7()),
 			EntityType: modelnew.EntityTypeInternalChannelThreadDialog,
 			OldID:      strconv.Itoa(user.UserID),
 			NewID:      threadDialog.ID,
@@ -465,7 +465,7 @@ func (c *Converter) restoreWebitelUser(ctx context.Context, tx pgx.Tx, user *old
 	)
 	newContact := &modelnew.Contact{
 		BaseModel: modelnew.BaseModel{
-			ID:        uuid.New(),
+			ID:        uuid.Must(uuid.NewV7()),
 			DomainID:  domainID,
 			CreatedAt: now,
 			UpdatedAt: now,

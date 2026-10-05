@@ -1,6 +1,6 @@
 package new
 
-import "github.com/google/uuid"
+import "github.com/gofrs/uuid/v5"
 
 type EntityType string
 

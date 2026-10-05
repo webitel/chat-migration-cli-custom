@@ -4,7 +4,7 @@ import (
 	"context"
 	"strconv"
 
-	"github.com/google/uuid"
+	"github.com/gofrs/uuid/v5"
 	modelnew "github.com/webitel/chat-migration-cli-custom/internal/model/new"
 )
 
@@ -53,7 +53,7 @@ func (c *Converter) MigrateFacebookProviders(ctx context.Context) error {
 	for _, p := range providers {
 		matchedFlowIDs[p.FlowID] = struct{}{}
 		migrationRows = append(migrationRows, &modelnew.MigrationRow{
-			ID:         uuid.New(),
+			ID:         uuid.Must(uuid.NewV7()),
 			EntityType: modelnew.EntityTypeProviderToGateway,
 			OldID:      strconv.Itoa(p.ID),
 			NewID:      gateByFlowID[p.FlowID],

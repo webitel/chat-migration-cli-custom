@@ -3,7 +3,7 @@ package olddb
 import (
 	"context"
 
-	"github.com/google/uuid"
+	"github.com/gofrs/uuid/v5"
 	"github.com/webitel/chat-migration-cli-custom/internal/model/old"
 )
 
@@ -15,7 +15,7 @@ func NewMessageStore(db *DB) *MessageStore {
 	return &MessageStore{db: db}
 }
 
-func (s *MessageStore) GetMessagesByConversationID(ctx context.Context, conversationIDs uuid.UUIDs) ([]*old.Message, error) {
+func (s *MessageStore) GetMessagesByConversationID(ctx context.Context, conversationIDs []uuid.UUID) ([]*old.Message, error) {
 	var (
 		query = `SELECT
        m.id,

@@ -3,7 +3,7 @@ package new
 import (
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/gofrs/uuid/v5"
 )
 
 // MessageType maps to im_message.messages.type

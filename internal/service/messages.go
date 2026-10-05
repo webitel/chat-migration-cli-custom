@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/gofrs/uuid/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/rivo/uniseg"
 	modelnew "github.com/webitel/chat-migration-cli-custom/internal/model/new"
@@ -269,7 +269,9 @@ func (c *Converter) getConversationMap(ctx context.Context, lastInitiator, lastF
 	}
 	var convIDs []string
 	for _, conv := range conversations {
-		convIDs = append(convIDs, conv.ConvIDs.Strings()...)
+		for _, id := range conv.ConvIDs {
+			convIDs = append(convIDs, id.String())
+		}
 	}
 	threads, err := c.resolver.ResolveMigrationRows(ctx, tx, &modelnew.MigrationRowFilters{
 		Type:   []modelnew.EntityType{modelnew.EntityTypeConversationThread},
@@ -301,7 +303,9 @@ func (c *Converter) getConversationMapSyncMode(ctx context.Context, lastInitiato
 	}
 	var convIDs []string
 	for _, conv := range conversations {
-		convIDs = append(convIDs, conv.ConvIDs.Strings()...)
+		for _, id := range conv.ConvIDs {
+			convIDs = append(convIDs, id.String())
+		}
 	}
 	threads, err := c.resolver.ResolveMigrationRows(ctx, tx, &modelnew.MigrationRowFilters{
 		Type:   []modelnew.EntityType{modelnew.EntityTypeConversationThread},
@@ -386,7 +390,7 @@ func (c *Converter) migratePageMessages(ctx context.Context, tx pgx.Tx, threadID
 }
 
 func (c *Converter) batchFetchMessages(ctx context.Context, threadIDToConv map[uuid.UUID]*modelold.GroupedConversation) (map[uuid.UUID][]*modelold.Message, error) {
-	var allConvIDs uuid.UUIDs
+	var allConvIDs []uuid.UUID
 	for _, conv := range threadIDToConv {
 		allConvIDs = append(allConvIDs, conv.ConvIDs...)
 	}
@@ -579,7 +583,7 @@ func (c *Converter) buildMessage(threadID, senderID, memberID uuid.UUID, oldMsg 
 	}
 	messageType := c.convertMessageType(oldMsg.Type)
 	newMsg := &modelnew.Message{
-		ID:        uuid.New(),
+		ID:        uuid.Must(uuid.NewV7AtTime(oldMsg.CreatedAt)),
 		ThreadID:  threadID,
 		SenderID:  senderID,
 		MemberID:  memberID,
@@ -611,7 +615,7 @@ func (c *Converter) buildMessage(threadID, senderID, memberID uuid.UUID, oldMsg 
 	var migrationRow *modelnew.MigrationRow
 	if messageType == modelnew.MessageTypeText || messageType == modelnew.MessageTypeFile {
 		migrationRow = &modelnew.MigrationRow{
-			ID:         uuid.New(),
+			ID:         uuid.Must(uuid.NewV7()),
 			EntityType: modelnew.EntityTypeMessage,
 			OldID:      strconv.FormatInt(oldMsg.ID, 10),
 			NewID:      newMsg.ID,
@@ -665,7 +669,7 @@ func (c *Converter) convertMessageDocument(messageID uuid.UUID, oldMsg *modelold
 		return nil
 	}
 	var res = modelnew.MessageDocument{
-		ID:        uuid.New(),
+		ID:        uuid.Must(uuid.NewV7AtTime(oldMsg.CreatedAt)),
 		MessageID: messageID,
 		CreatedAt: oldMsg.CreatedAt,
 	}

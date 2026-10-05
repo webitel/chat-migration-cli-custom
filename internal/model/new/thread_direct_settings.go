@@ -3,7 +3,7 @@ package new
 import (
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/gofrs/uuid/v5"
 )
 
 // DirectSettings maps to im_thread.direct_settings
