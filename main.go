@@ -9,7 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/google/uuid"
+	"github.com/gofrs/uuid/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/viper"
 	"github.com/webitel/chat-migration-cli-custom/internal/buildinfo"
@@ -231,7 +231,7 @@ func mustLoadConfig() config {
 		slog.Error("MIGRATION_SESSION_ID is required")
 		os.Exit(1)
 	}
-	sessionID, err := uuid.Parse(sessionIDRaw)
+	sessionID, err := uuid.FromString(sessionIDRaw)
 	if err != nil {
 		slog.Error("MIGRATION_SESSION_ID must be a valid UUID", "error", err)
 		os.Exit(1)

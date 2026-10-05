@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/google/uuid"
+	"github.com/gofrs/uuid/v5"
 	modelnew "github.com/webitel/chat-migration-cli-custom/internal/model/new"
 )
 
@@ -59,7 +59,7 @@ func (c *Converter) MigrateBotsToContacts(ctx context.Context) error {
 	migrationRows := make([]*modelnew.MigrationRow, 0, len(mappings))
 	for _, m := range mappings {
 		migrationRows = append(migrationRows, &modelnew.MigrationRow{
-			ID:         uuid.New(),
+			ID:         uuid.Must(uuid.NewV7()),
 			EntityType: modelnew.EntityTypeBotContact,
 			OldID:      strconv.Itoa(m.OldBotID),
 			NewID:      m.NewBotID,

@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/google/uuid"
+	"github.com/gofrs/uuid/v5"
 	modelnew "github.com/webitel/chat-migration-cli-custom/internal/model/new"
 	"github.com/webitel/chat-migration-cli-custom/internal/model/old"
 )
@@ -64,7 +64,7 @@ func (c *Converter) MigrateClientsToContacts(ctx context.Context) error {
 			contacts = append(contacts, converted...)
 			for _, contact := range converted {
 				migrationRows = append(migrationRows, &modelnew.MigrationRow{
-					ID:         uuid.New(),
+					ID:         uuid.Must(uuid.NewV7()),
 					EntityType: modelnew.EntityTypeClientContact,
 					OldID:      strconv.Itoa(int(client.ID)),
 					NewID:      contact.ID,
@@ -72,7 +72,7 @@ func (c *Converter) MigrateClientsToContacts(ctx context.Context) error {
 				})
 				for _, gateway := range client.Gateways {
 					migrationRows = append(migrationRows, &modelnew.MigrationRow{
-						ID:         uuid.New(),
+						ID:         uuid.Must(uuid.NewV7()),
 						EntityType: modelnew.EntityTypeGatewayToContact,
 						OldID:      strconv.Itoa(int(gateway)),
 						NewID:      contact.ID,
@@ -182,7 +182,7 @@ func (c *Converter) MigrateClientsToContactsSyncMode(ctx context.Context) error 
 		var migrationRows []*modelnew.MigrationRow
 		for _, p := range pairs {
 			migrationRows = append(migrationRows, &modelnew.MigrationRow{
-				ID:         uuid.New(),
+				ID:         uuid.Must(uuid.NewV7()),
 				EntityType: modelnew.EntityTypeClientContact,
 				OldID:      strconv.Itoa(int(p.client.ID)),
 				NewID:      p.contact.ID,
@@ -190,7 +190,7 @@ func (c *Converter) MigrateClientsToContactsSyncMode(ctx context.Context) error 
 			})
 			for _, gateway := range p.client.Gateways {
 				migrationRows = append(migrationRows, &modelnew.MigrationRow{
-					ID:         uuid.New(),
+					ID:         uuid.Must(uuid.NewV7()),
 					EntityType: modelnew.EntityTypeGatewayToContact,
 					OldID:      strconv.Itoa(int(gateway)),
 					NewID:      p.contact.ID,
@@ -284,7 +284,7 @@ func (c *Converter) MigratePortalClientsToContacts(ctx context.Context) error {
 			contact := convertPortalClientToContact(client, c.portalChatIssuerID)
 			contacts = append(contacts, contact)
 			migrationRows = append(migrationRows, &modelnew.MigrationRow{
-				ID:         uuid.New(),
+				ID:         uuid.Must(uuid.NewV7()),
 				EntityType: modelnew.EntityTypeClientContact,
 				OldID:      strconv.Itoa(client.ID),
 				NewID:      contact.ID,
@@ -391,7 +391,7 @@ func (c *Converter) MigratePortalClientsToContactsSyncMode(ctx context.Context) 
 		var migrationRows []*modelnew.MigrationRow
 		for _, p := range pairs {
 			migrationRows = append(migrationRows, &modelnew.MigrationRow{
-				ID:         uuid.New(),
+				ID:         uuid.Must(uuid.NewV7()),
 				EntityType: modelnew.EntityTypeClientContact,
 				OldID:      strconv.Itoa(p.client.ID),
 				NewID:      p.contact.ID,
@@ -420,7 +420,7 @@ func convertClientToContact(client *old.Client) []*modelnew.Contact {
 	for _, domain := range client.DomainIDs {
 		contacts = append(contacts, &modelnew.Contact{
 			BaseModel: modelnew.BaseModel{
-				ID:        uuid.New(),
+				ID:        uuid.Must(uuid.NewV7AtTime(client.CreatedAt)),
 				DomainID:  domain,
 				CreatedAt: client.CreatedAt,
 				UpdatedAt: client.CreatedAt,
@@ -443,7 +443,7 @@ func convertPortalClientToContact(client *old.PortalClient, issuerID string) *mo
 	}
 	return &modelnew.Contact{
 		BaseModel: modelnew.BaseModel{
-			ID:        uuid.New(),
+			ID:        uuid.Must(uuid.NewV7AtTime(client.CreatedAt)),
 			DomainID:  client.DomainID,
 			CreatedAt: client.CreatedAt,
 			UpdatedAt: updatedAt,
