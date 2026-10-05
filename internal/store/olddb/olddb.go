@@ -15,8 +15,9 @@ type DB struct {
 	messageStore      *MessageStore
 }
 
-func New(pool *pgxpool.Pool, migratePortalClients bool) (*DB, error) {
+func New(pool *pgxpool.Pool, _ bool) (*DB, error) {
 	db := &DB{pool: pool}
+
 	return db, nil
 }
 
@@ -28,6 +29,7 @@ func (db *DB) AppStore() *AppStore {
 	if db.appStore == nil {
 		db.appStore = NewAppStore(db)
 	}
+
 	return db.appStore
 }
 
@@ -35,6 +37,7 @@ func (db *DB) BotStore() *BotStore {
 	if db.botStore == nil {
 		db.botStore = NewBotStore(db)
 	}
+
 	return db.botStore
 }
 
@@ -42,6 +45,7 @@ func (db *DB) ClientStore() *ClientStore {
 	if db.clientStore == nil {
 		db.clientStore = NewClientStore(db)
 	}
+
 	return db.clientStore
 }
 
@@ -49,6 +53,7 @@ func (db *DB) ConversationStore() *ConversationStore {
 	if db.conversationStore == nil {
 		db.conversationStore = NewConversationStore(db)
 	}
+
 	return db.conversationStore
 }
 
@@ -56,5 +61,6 @@ func (db *DB) MessageStore() *MessageStore {
 	if db.messageStore == nil {
 		db.messageStore = NewMessageStore(db)
 	}
+
 	return db.messageStore
 }

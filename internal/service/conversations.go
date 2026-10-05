@@ -7,7 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gofrs/uuid/v5"
+	"github.com/gofrs/uuid/v5" //nolint:depguard // NewV7AtTime is not available in google/uuid
+
 	modelnew "github.com/webitel/chat-migration-cli-custom/internal/model/new"
 	"github.com/webitel/chat-migration-cli-custom/internal/model/old"
 )
@@ -18,6 +19,7 @@ const (
 
 func (c *Converter) MigrateConversations(ctx context.Context) error {
 	const perPage = 1000
+
 	c.log.Debug("starting conversations migration")
 
 	if err := c.newDB.MigrationStore().CheckAllStepsCompleted(ctx); err != nil {
@@ -28,10 +30,12 @@ func (c *Converter) MigrateConversations(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
 	deps := []string{StepClientsToContacts, StepBotsToContacts}
 	if c.migratePortalClients {
 		deps = append(deps, StepPortalClientsToContacts)
 	}
+
 	for _, dep := range deps {
 		if _, ok := completedSteps[dep]; !ok {
 			return fmt.Errorf("step %q requires step %q to be completed first", StepConversations, dep)
@@ -54,10 +58,12 @@ func (c *Converter) MigrateConversations(ctx context.Context) error {
 
 	fail := func(cause error) error {
 		_ = c.newDB.MigrationStore().MarkStepFailed(ctx, c.sessionID, StepConversations, 0, cause.Error())
+
 		return cause
 	}
 
 	lastInitiator, lastFlowID := 0, 0
+
 	for {
 		tx, err := c.newDB.Pool().Begin(ctx)
 		if err != nil {
@@ -66,19 +72,24 @@ func (c *Converter) MigrateConversations(ctx context.Context) error {
 
 		groupedConversations, err := c.oldDB.ConversationStore().GetGroupedConversationsByUsersAndFlowFromDate(ctx, lastInitiator, lastFlowID, perPage, fromDate, toDate, flowIDs)
 		if err != nil {
-			tx.Rollback(ctx)
+			_ = tx.Rollback(ctx)
+
 			return fail(err)
 		}
+
 		if len(groupedConversations) == 0 {
-			tx.Rollback(ctx)
+			_ = tx.Rollback(ctx)
+
 			break
 		}
+
 		c.log.Debug("conversations page fetched", "lastInitiator", lastInitiator, "lastFlowID", lastFlowID, "count", len(groupedConversations))
 
 		var (
 			threads       []*modelnew.Thread
 			migrationRows []*modelnew.MigrationRow
 		)
+
 		for _, conversation := range groupedConversations {
 			converted := convertGroupedConversationToThread(conversation)
 			for _, convID := range conversation.ConvIDs {
@@ -90,10 +101,11 @@ func (c *Converter) MigrateConversations(ctx context.Context) error {
 					DomainID:   conversation.DomainID,
 				})
 			}
+
 			migrationRows = append(migrationRows, &modelnew.MigrationRow{
 				ID:         uuid.Must(uuid.NewV7()),
 				EntityType: modelnew.EntityTypeFlowIDAndInitiatorIDToThread,
-				OldID:      buildFlowIDAndInitiatorIdToThreadOldID(conversation.FlowID, conversation.Initiator),
+				OldID:      buildFlowIDAndInitiatorIDToThreadOldID(conversation.FlowID, conversation.Initiator),
 				NewID:      converted.ID,
 				DomainID:   conversation.DomainID,
 			})
@@ -101,11 +113,14 @@ func (c *Converter) MigrateConversations(ctx context.Context) error {
 		}
 
 		if err := c.newDB.ThreadStore().InsertThreads(ctx, tx, threads); err != nil {
-			tx.Rollback(ctx)
+			_ = tx.Rollback(ctx)
+
 			return fail(err)
 		}
+
 		if err := c.newDB.MigrationStore().InsertMigrations(ctx, tx, c.sessionID, migrationRows); err != nil {
-			tx.Rollback(ctx)
+			_ = tx.Rollback(ctx)
+
 			return fail(err)
 		}
 
@@ -117,6 +132,7 @@ func (c *Converter) MigrateConversations(ctx context.Context) error {
 				maxFlowID = conv.FlowID
 			}
 		}
+
 		lastInitiator, lastFlowID = maxInitiator, maxFlowID
 
 		if err := tx.Commit(ctx); err != nil {
@@ -134,18 +150,20 @@ func (c *Converter) MigrateConversations(ctx context.Context) error {
 	return nil
 }
 
-func buildFlowIDAndInitiatorIdToThreadOldID(flowID, initiatorID int) string {
+func buildFlowIDAndInitiatorIDToThreadOldID(flowID, initiatorID int) string {
 	return strconv.Itoa(flowID) + "_" + strconv.Itoa(initiatorID)
 }
 
-func deconstructFlowIDAndInitiatorId(recordedID string) (flowID, initiatorID int) {
+func deconstructFlowIDAndInitiatorID(recordedID string) (flowID, initiatorID int) {
 	parts := strings.Split(recordedID, "_")
 	if len(parts) != 2 {
 		return 0, 0
 	}
+
 	flowID, _ = strconv.Atoi(parts[0])
 	initiatorID, _ = strconv.Atoi(parts[1])
-	return
+
+	return flowID, initiatorID
 }
 
 func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
@@ -153,6 +171,7 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 		perPage  = 1000
 		stepName = SyncStepConversations
 	)
+
 	c.log.Debug("starting conversations migration")
 
 	if err := c.newDB.MigrationStore().CheckAllStepsCompleted(ctx); err != nil {
@@ -163,10 +182,12 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
 	syncDeps := []string{SyncStepClientsToContacts}
 	if c.migratePortalClients {
 		syncDeps = append(syncDeps, SyncStepPortalClientsToContacts)
 	}
+
 	for _, dep := range syncDeps {
 		if _, ok := completedSteps[dep]; !ok {
 			return fmt.Errorf("step %q requires step %q to be completed first", stepName, dep)
@@ -184,6 +205,7 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 
 	fail := func(cause error) error {
 		_ = c.newDB.MigrationStore().MarkStepFailed(ctx, c.sessionID, stepName, 0, cause.Error())
+
 		return cause
 	}
 
@@ -196,10 +218,13 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 	if err != nil {
 		return fail(err)
 	}
+
 	if err := c.newDB.MigrationStore().NullifyMigrationRowsExtraKey(ctx, nullifyTx, newThreadAfterSyncExtraKey, string(modelnew.EntityTypeFlowIDAndInitiatorIDToThread)); err != nil {
-		nullifyTx.Rollback(ctx)
+		_ = nullifyTx.Rollback(ctx)
+
 		return fail(err)
 	}
+
 	if err := nullifyTx.Commit(ctx); err != nil {
 		return fail(err)
 	}
@@ -210,6 +235,7 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 	}
 
 	lastInitiator, lastFlowID := 0, 0
+
 	for {
 		tx, err := c.newDB.Pool().Begin(ctx)
 		if err != nil {
@@ -218,13 +244,17 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 
 		groupedConversations, err := c.oldDB.ConversationStore().GetGroupedConversationsByUsersAndFlowFromDate(ctx, lastInitiator, lastFlowID, perPage, fromDate, toDate, flowIDs)
 		if err != nil {
-			tx.Rollback(ctx)
+			_ = tx.Rollback(ctx)
+
 			return fail(err)
 		}
+
 		if len(groupedConversations) == 0 {
-			tx.Rollback(ctx)
+			_ = tx.Rollback(ctx)
+
 			break
 		}
+
 		originalCount := len(groupedConversations)
 		c.log.Debug("conversations page fetched", "lastInitiator", lastInitiator, "lastFlowID", lastFlowID, "count", originalCount)
 
@@ -246,7 +276,7 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 			idsToCheck []string
 		)
 		for _, conv := range groupedConversations {
-			idsToCheck = append(idsToCheck, buildFlowIDAndInitiatorIdToThreadOldID(conv.FlowID, conv.Initiator))
+			idsToCheck = append(idsToCheck, buildFlowIDAndInitiatorIDToThreadOldID(conv.FlowID, conv.Initiator))
 		}
 
 		alreadyMigratedThreads, err := c.newDB.MigrationStore().GetMigrationRows(ctx, tx, &modelnew.MigrationRowFilters{
@@ -254,7 +284,8 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 			Type:   []modelnew.EntityType{modelnew.EntityTypeFlowIDAndInitiatorIDToThread},
 		})
 		if err != nil {
-			tx.Rollback(ctx)
+			_ = tx.Rollback(ctx)
+
 			return fail(err)
 		}
 
@@ -263,28 +294,32 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 				j     int
 				found bool
 			)
-			flowID, initiatorID := deconstructFlowIDAndInitiatorId(thread.OldID)
-			for i, conv := range groupedConversations {
-				if flowID == conv.FlowID && initiatorID == conv.Initiator && thread.DomainID == conv.DomainID {
-					for _, convID := range conv.ConvIDs {
-						migrationRows = append(migrationRows, &modelnew.MigrationRow{
-							ID:         uuid.Must(uuid.NewV7()),
-							EntityType: modelnew.EntityTypeConversationThread,
-							OldID:      convID.String(),
-							NewID:      thread.NewID,
-							DomainID:   thread.DomainID,
-						})
-					}
 
-					j = i
-					found = true
-					break
+			flowID, initiatorID := deconstructFlowIDAndInitiatorID(thread.OldID)
+			for i, conv := range groupedConversations {
+				if flowID != conv.FlowID || initiatorID != conv.Initiator || thread.DomainID != conv.DomainID {
+					continue
 				}
+
+				for _, convID := range conv.ConvIDs {
+					migrationRows = append(migrationRows, &modelnew.MigrationRow{
+						ID:         uuid.Must(uuid.NewV7()),
+						EntityType: modelnew.EntityTypeConversationThread,
+						OldID:      convID.String(),
+						NewID:      thread.NewID,
+						DomainID:   thread.DomainID,
+					})
+				}
+
+				j = i
+				found = true
+
+				break
 			}
+
 			if found {
 				groupedConversations = append(groupedConversations[:j], groupedConversations[j+1:]...)
 			}
-
 		}
 
 		for _, conversation := range groupedConversations {
@@ -298,11 +333,12 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 					DomainID:   conversation.DomainID,
 				})
 			}
+
 			syncExtraKey := newThreadAfterSyncExtraKey
 			migrationRows = append(migrationRows, &modelnew.MigrationRow{
 				ID:         uuid.Must(uuid.NewV7()),
 				EntityType: modelnew.EntityTypeFlowIDAndInitiatorIDToThread,
-				OldID:      buildFlowIDAndInitiatorIdToThreadOldID(conversation.FlowID, conversation.Initiator),
+				OldID:      buildFlowIDAndInitiatorIDToThreadOldID(conversation.FlowID, conversation.Initiator),
 				NewID:      converted.ID,
 				DomainID:   conversation.DomainID,
 				ExtraKey:   &syncExtraKey,
@@ -311,11 +347,14 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 		}
 
 		if err := c.newDB.ThreadStore().InsertThreads(ctx, tx, threads); err != nil {
-			tx.Rollback(ctx)
+			_ = tx.Rollback(ctx)
+
 			return fail(err)
 		}
+
 		if err := c.newDB.MigrationStore().InsertMigrations(ctx, tx, c.sessionID, migrationRows); err != nil {
-			tx.Rollback(ctx)
+			_ = tx.Rollback(ctx)
+
 			return fail(err)
 		}
 
@@ -333,6 +372,7 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 			break
 		}
 	}
+
 	return nil
 }
 

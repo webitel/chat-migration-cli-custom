@@ -39,6 +39,7 @@ func (db *DB) ContactStore() *ContactStore {
 	if db.contactStore == nil {
 		db.contactStore = NewContactStore(db)
 	}
+
 	return db.contactStore
 }
 
@@ -46,6 +47,7 @@ func (db *DB) ThreadStore() *ThreadStore {
 	if db.threadStore == nil {
 		db.threadStore = NewThreadStore(db)
 	}
+
 	return db.threadStore
 }
 
@@ -53,6 +55,7 @@ func (db *DB) DirectSettingsStore() *DirectSettingsStore {
 	if db.directSettingsStore == nil {
 		db.directSettingsStore = NewDirectSettingsStore(db)
 	}
+
 	return db.directSettingsStore
 }
 
@@ -60,6 +63,7 @@ func (db *DB) MigrationStore() *MigrationStore {
 	if db.migrationStore == nil {
 		db.migrationStore = NewMigrationStore(db)
 	}
+
 	return db.migrationStore
 }
 
@@ -67,6 +71,7 @@ func (db *DB) MessageStore() *MessageStore {
 	if db.messageStore == nil {
 		db.messageStore = NewMessageStore(db)
 	}
+
 	return db.messageStore
 }
 
@@ -113,6 +118,7 @@ func (db *DB) InitTables(ctx context.Context) error {
 	mode TEXT NOT NULL
 );
 	`)
+
 	return err
 }
 
@@ -129,25 +135,31 @@ func (db *DB) CheckTablesExist(ctx context.Context) error {
 	defer rows.Close()
 
 	existing := make(map[string]struct{}, len(requiredTables))
+
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
 			return err
 		}
+
 		existing[name] = struct{}{}
 	}
+
 	if err := rows.Err(); err != nil {
 		return err
 	}
 
 	var missing []string
+
 	for _, table := range requiredTables {
 		if _, ok := existing[table]; !ok {
 			missing = append(missing, table)
 		}
 	}
+
 	if len(missing) > 0 {
 		sort.Strings(missing)
+
 		return fmt.Errorf("missing required tables: %s (run with --init to create them)", strings.Join(missing, ", "))
 	}
 
@@ -158,6 +170,7 @@ func (db *DB) ThreadDialogStore() *ThreadDialogStore {
 	if db.threadDialogStore == nil {
 		db.threadDialogStore = &ThreadDialogStore{store: db}
 	}
+
 	return db.threadDialogStore
 }
 
@@ -165,6 +178,7 @@ func (db *DB) AppStore() *AppStore {
 	if db.appStore == nil {
 		db.appStore = NewAppStore(db)
 	}
+
 	return db.appStore
 }
 
@@ -172,5 +186,6 @@ func (db *DB) BotMappingStore() *BotMappingStore {
 	if db.botMappingStore == nil {
 		db.botMappingStore = NewBotMappingStore(db)
 	}
+
 	return db.botMappingStore
 }

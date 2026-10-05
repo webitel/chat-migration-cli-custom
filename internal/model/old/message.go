@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/gofrs/uuid/v5"
+	"github.com/gofrs/uuid/v5" //nolint:depguard // NewV7AtTime is not available in google/uuid
 )
 
 type OldMessageType string
@@ -45,7 +45,7 @@ type Message struct {
 // Content is the Go representation of the chat.message.content JSONB column.
 // It is serialized/deserialized with standard encoding/json.
 // JSON keys match protojson output (UseProtoNames=true, UseEnumNumbers=true).
-type Content struct {
+type Content struct { //nolint:recvcheck // Scan needs a pointer receiver, Value a value one
 	Keyboard *ReplyMarkup `json:"keyboard,omitempty"`
 }
 
@@ -64,14 +64,14 @@ type ButtonRow struct {
 }
 
 // Button is one interactive button inside a row.
-// Exactly one of Url, Code, Share will be non-nil (mirrors proto oneof).
+// Exactly one of URL, Code, Share will be non-nil (mirrors proto oneof).
 type Button struct {
 	// Display caption shown to the user.
 	Text string `json:"text,omitempty"`
 
 	// oneof type -----------------------------------------------
 	// Navigate to this URL.
-	Url *string `json:"url,omitempty"`
+	URL *string `json:"url,omitempty"`
 	// Postback / callback data sent back when clicked.
 	Code *string `json:"code,omitempty"`
 	// Request to share contact info. Value is ButtonRequest enum (int32).
@@ -116,11 +116,13 @@ type Account struct {
 // ── sql.Scanner / driver.Valuer ──────────────────────────────────────────────
 
 // Scan implements sql.Scanner so *Content can be used directly in sqlx scans.
-func (c *Content) Scan(src interface{}) error {
+func (c *Content) Scan(src any) error {
 	if src == nil {
 		return nil // NULL column → leave zero value
 	}
+
 	var b []byte
+
 	switch v := src.(type) {
 	case []byte:
 		b = v
@@ -129,17 +131,20 @@ func (c *Content) Scan(src interface{}) error {
 	default:
 		return fmt.Errorf("content: cannot scan type %T", src)
 	}
+
 	return json.Unmarshal(b, c)
 }
 
 // Value implements driver.Valuer so Content can be written back to DB.
 func (c Content) Value() (driver.Value, error) {
 	if c.Keyboard == nil {
-		return nil, nil // store NULL when empty
+		return nil, nil //nolint:nilnil // driver.Valuer: nil value stores NULL
 	}
+
 	b, err := json.Marshal(c)
 	if err != nil {
 		return nil, err
 	}
+
 	return string(b), nil
 }

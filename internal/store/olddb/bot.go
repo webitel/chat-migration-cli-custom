@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5"
+
 	"github.com/webitel/chat-migration-cli-custom/internal/model/old"
 )
 
@@ -25,6 +26,7 @@ func (s *BotStore) GetProviderIDsByFlowIDs(ctx context.Context, flowIDs []int) (
 	if len(flowIDs) == 0 {
 		return nil, nil
 	}
+
 	rows, err := s.db.Pool().Query(ctx, `
 		SELECT id, flow_id FROM chat.bot
 		WHERE provider = 'messenger' AND flow_id = ANY($1)`, flowIDs)

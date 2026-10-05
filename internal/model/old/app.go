@@ -3,7 +3,7 @@ package old
 import (
 	"time"
 
-	"github.com/gofrs/uuid/v5"
+	"github.com/gofrs/uuid/v5" //nolint:depguard // NewV7AtTime is not available in google/uuid
 )
 
 type PortalApp struct {

@@ -33,10 +33,13 @@ func (c *Converter) ReconcileFacebookProviders(ctx context.Context) (*Reconcilia
 	if err != nil {
 		return nil, err
 	}
+
 	flowIDs := make([]int, 0, len(gateMappings))
 	for _, m := range gateMappings {
 		flowIDs = append(flowIDs, m.OldBotID)
 	}
+
 	params := map[string]any{"flow_ids": flowIDs}
+
 	return runReconciliation(ctx, c.oldDB.Pool(), c.newDB.Pool(), facebookReconSourceSQL, facebookReconTargetSQL, params, facebookReconChecks)
 }

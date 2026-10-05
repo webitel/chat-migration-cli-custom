@@ -2,6 +2,7 @@ package new
 
 type Contact struct {
 	BaseModel
+
 	IssuerID      string `json:"issuer_id" db:"issuer_id"`
 	SubjectID     string `json:"subject_id" db:"subject_id"`
 	ApplicationID string `json:"application_id" db:"application_id"`

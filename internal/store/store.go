@@ -20,6 +20,7 @@ func Connect(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
+
 		return nil, fmt.Errorf("ping: %w", err)
 	}
 

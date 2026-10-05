@@ -3,10 +3,10 @@ package new
 import (
 	"database/sql/driver"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"time"
 
-	"github.com/gofrs/uuid/v5"
+	"github.com/gofrs/uuid/v5" //nolint:depguard // NewV7AtTime is not available in google/uuid
 )
 
 type MessageSystem struct {
@@ -41,14 +41,16 @@ func (m *MessageInteractive) Value() (driver.Value, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	return payload, nil
 }
 
 func (m *MessageInteractive) Scan(value any) error {
 	payload, ok := value.([]byte)
 	if !ok {
-		return fmt.Errorf("error scanning interactive message")
+		return errors.New("error scanning interactive message")
 	}
+
 	return json.Unmarshal(payload, m)
 }
 

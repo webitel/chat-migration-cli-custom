@@ -101,11 +101,14 @@ func (c *Converter) ReconcilePortalClientsToContacts(ctx context.Context) (*Reco
 	if err != nil {
 		return nil, err
 	}
+
 	flowIDs, err := c.newDB.BotMappingStore().GetOldBotIDsByType(ctx, portalFlowBotType)
 	if err != nil {
 		return nil, err
 	}
+
 	params := map[string]any{"created_from": fromDate, "created_to": toDate, "session_id": c.sessionID, "flow_ids": flowIDs}
+
 	return runReconciliation(ctx, c.oldDB.Pool(), c.newDB.Pool(), portalReconSourceSQL, portalReconTargetSQL, params, portalReconChecks)
 }
 
@@ -121,10 +124,13 @@ func (c *Converter) ReconcilePortalClientsToContactsSyncMode(ctx context.Context
 	if err != nil {
 		return nil, err
 	}
+
 	flowIDs, err := c.newDB.BotMappingStore().GetOldBotIDsByType(ctx, portalFlowBotType)
 	if err != nil {
 		return nil, err
 	}
+
 	params := map[string]any{"created_from": fromDate, "created_to": toDate, "session_id": c.sessionID, "flow_ids": flowIDs}
+
 	return runReconciliation(ctx, c.oldDB.Pool(), c.newDB.Pool(), portalReconSourceSQL, portalReconSyncTargetSQL, params, portalReconSyncChecks)
 }

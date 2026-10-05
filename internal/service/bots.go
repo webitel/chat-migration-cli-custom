@@ -5,7 +5,8 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/gofrs/uuid/v5"
+	"github.com/gofrs/uuid/v5" //nolint:depguard // NewV7AtTime is not available in google/uuid
+
 	modelnew "github.com/webitel/chat-migration-cli-custom/internal/model/new"
 )
 
@@ -33,9 +34,11 @@ func (c *Converter) MigrateBotsToContacts(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
 	if _, ok := completedSteps[StepClientsToContacts]; !ok {
 		return fmt.Errorf("step %q requires step %q to be completed first", StepBotsToContacts, StepClientsToContacts)
 	}
+
 	if c.migratePortalClients {
 		if _, ok := completedSteps[StepPortalClientsToContacts]; !ok {
 			return fmt.Errorf("step %q requires step %q to be completed first", StepBotsToContacts, StepPortalClientsToContacts)
@@ -48,6 +51,7 @@ func (c *Converter) MigrateBotsToContacts(ctx context.Context) error {
 
 	fail := func(cause error) error {
 		_ = c.newDB.MigrationStore().MarkStepFailed(ctx, c.sessionID, StepBotsToContacts, 0, cause.Error())
+
 		return cause
 	}
 
@@ -73,7 +77,8 @@ func (c *Converter) MigrateBotsToContacts(ctx context.Context) error {
 	}
 
 	if err := c.newDB.MigrationStore().InsertMigrations(ctx, tx, c.sessionID, migrationRows); err != nil {
-		tx.Rollback(ctx)
+		_ = tx.Rollback(ctx)
+
 		return fail(err)
 	}
 
@@ -82,13 +87,15 @@ func (c *Converter) MigrateBotsToContacts(ctx context.Context) error {
 	}
 
 	c.addRecordsMigrated(len(migrationRows))
+
 	return nil
 }
 
 // MigrateBotsToContactsSyncMode is a no-op: bots are linked once, in full
 // mode, from public.bot_mapping -- there is nothing new to pick up on a sync
 // run.
-func (c *Converter) MigrateBotsToContactsSyncMode(ctx context.Context) error {
+func (c *Converter) MigrateBotsToContactsSyncMode(_ context.Context) error {
 	c.log.Info("bots-to-contacts sync step is a no-op; bots are migrated once in full mode from public.bot_mapping")
+
 	return nil
 }

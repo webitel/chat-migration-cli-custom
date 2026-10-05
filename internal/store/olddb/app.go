@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5"
+
 	"github.com/webitel/chat-migration-cli-custom/internal/model/old"
 )
 
@@ -15,9 +16,8 @@ func NewAppStore(db *DB) *AppStore {
 	return &AppStore{db: db}
 }
 
-func (s *AppStore) Get(ctx context.Context, offset int, limit int) ([]*old.PortalApp, error) {
-	var (
-		query = `SELECT
+func (s *AppStore) Get(ctx context.Context, offset, limit int) ([]*old.PortalApp, error) {
+	query := `SELECT
     id,
     dc,
     app,
@@ -41,14 +41,17 @@ func (s *AppStore) Get(ctx context.Context, offset int, limit int) ([]*old.Porta
     "limit"
 FROM portal.service_app
 ORDER BY id`
-	)
+
 	if offset < 0 {
 		offset = 0
 	}
+
 	if limit < 1 {
 		limit = 1
 	}
+
 	query += ` OFFSET $1 LIMIT $2`
+
 	rows, err := s.db.Pool().Query(ctx, query, offset, limit)
 	if err != nil {
 		return nil, err

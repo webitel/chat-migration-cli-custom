@@ -1,6 +1,6 @@
 package new
 
-import "github.com/gofrs/uuid/v5"
+import "github.com/gofrs/uuid/v5" //nolint:depguard // NewV7AtTime is not available in google/uuid
 
 // PeerType is stored as an integer in JSONB peer columns (from, send_to)
 type PeerType int16

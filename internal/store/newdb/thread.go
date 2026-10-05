@@ -6,6 +6,7 @@ import (
 
 	"github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
+
 	newmodel "github.com/webitel/chat-migration-cli-custom/internal/model/new"
 )
 
@@ -21,17 +22,16 @@ func (s *ThreadStore) InsertThreads(ctx context.Context, tx pgx.Tx, threads []*n
 	if len(threads) == 0 {
 		return nil
 	}
-	var (
-		query = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Insert("im_thread.thread").Columns(
-			"id",
-			"domain_id",
-			"created_at",
-			"updated_at",
-			"kind",
-			"owner",
-			"subject",
-			"description",
-		)
+
+	query := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Insert("im_thread.thread").Columns(
+		"id",
+		"domain_id",
+		"created_at",
+		"updated_at",
+		"kind",
+		"owner",
+		"subject",
+		"description",
 	)
 	for _, thread := range threads {
 		query = query.Values(

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+
 	modelnew "github.com/webitel/chat-migration-cli-custom/internal/model/new"
 )
 
@@ -26,13 +27,16 @@ func (s *BotMappingStore) GetTypes(ctx context.Context) ([]string, error) {
 	defer rows.Close()
 
 	var types []string
+
 	for rows.Next() {
 		var t string
 		if err := rows.Scan(&t); err != nil {
 			return nil, err
 		}
+
 		types = append(types, t)
 	}
+
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -52,13 +56,16 @@ func (s *BotMappingStore) GetOldBotIDsByType(ctx context.Context, botType string
 	defer rows.Close()
 
 	var ids []int32
+
 	for rows.Next() {
 		var id int32
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
+
 		ids = append(ids, id)
 	}
+
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -78,13 +85,16 @@ func (s *BotMappingStore) GetAllOldBotIDs(ctx context.Context) ([]int32, error) 
 	defer rows.Close()
 
 	var ids []int32
+
 	for rows.Next() {
 		var id int32
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
+
 		ids = append(ids, id)
 	}
+
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -108,6 +118,7 @@ func (s *BotMappingStore) GetGateMappings(ctx context.Context) ([]*modelnew.BotG
 	if err != nil {
 		return nil, err
 	}
+
 	return result, nil
 }
 
@@ -117,6 +128,7 @@ func (s *BotMappingStore) GetGateMappings(ctx context.Context) ([]*modelnew.BotG
 func (s *BotMappingStore) GetAll(ctx context.Context, schema, table string) ([]*modelnew.BotMapping, error) {
 	ident := pgx.Identifier{schema, table}.Sanitize()
 	query := fmt.Sprintf("SELECT old_bot_id, new_bot_id FROM %s", ident)
+
 	rows, err := s.db.pool.Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read bot mapping table %s.%s: %w", schema, table, err)
@@ -127,5 +139,6 @@ func (s *BotMappingStore) GetAll(ctx context.Context, schema, table string) ([]*
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan bot mapping table %s.%s (check for NULL old_bot_id/new_bot_id): %w", schema, table, err)
 	}
+
 	return result, nil
 }
