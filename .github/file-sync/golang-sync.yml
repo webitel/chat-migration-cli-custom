@@ -4,7 +4,7 @@ version: 1
 source:
   repository: webitel/reusable-configs
   config: golang/sync.yml
-  sha: ed338bf49283681a3a6d094affe218257a631b93
+  sha: ef4e42032ca6d3cd02a819e6978ed645e2e227b3
 files:
   .editorconfig:
     source: golang/configs/.editorconfig
@@ -20,13 +20,13 @@ files:
     sha256: 3f9a2526900d4505d509e45ee406c6cccfaaca7e1661f7919863019e74fdcdc2
   .github/workflows/pull-request-deliver.yml:
     source: common/workflows/pull-request-deliver.yml.njk
-    sha256: ec5f76b6554df2f32bddb54301671b5cdec8f9676a523d03af5212239cf736f8
+    sha256: c3110010e5dbf0a1e9736aa1adb6422a493993e4b24ae2bad9bacde2db28cccf
   .github/workflows/pull-request.yml:
     source: golang/workflows/pull-request.yml.njk
-    sha256: e4b0b07fa2d0100ac108426dcfa0a7f5f7e84121b69124df13e81526508ad90f
+    sha256: fa4f6203a90eb69b48b14428e644281564bd3fc5b7c656379ceeefb3bbf5890c
   .github/workflows/workflow.yml:
     source: golang/workflows/workflow.yml.njk
-    sha256: 1108cac943d5d935181c4194f5a63c962150c9acdf161a60be5ef570edb79b45
+    sha256: bfe6cff021ffe2a5d92b98a1f466c04bb74f966efc098b241175639a8a170e6f
   .gitignore:
     source: golang/configs/.gitignore
     sha256: 064a01c7caec063d75ca8558125a61d495f1572428bcce7eba210149be668c75

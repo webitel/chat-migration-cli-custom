@@ -79,6 +79,7 @@ jobs:
     needs: [ prepare, compile ]
     if: github.event.repository.private == false
     strategy:
+      fail-fast: false
       matrix:
         arch: ${{ fromJSON(needs.prepare.outputs.arch-matrix) }}
         codename: ${{ fromJSON(needs.prepare.outputs.codename-matrix) }}
