@@ -1,14 +1,12 @@
 // Package buildinfo holds the application version and local build metadata.
 package buildinfo
 
-// Version is the semantic version of the application (Major.Minor.Patch).
-// It is set manually by a developer.
-const Version = "1.0.3"
-
-// The variables below are populated at build time via -ldflags -X
-// (see build.ps1). Their defaults keep plain `go run`/`go build` working
-// without any special build script.
+// The variables below are populated at build time via -ldflags -X.
+// Their defaults keep plain `go run`/`go build` working without any
+// special build flags.
 var (
+	// Version is the semantic version of the application (Major.Minor.Patch).
+	Version     = "1.0.3"
 	BuildNumber = "dev"
 	GitCommit   = "unknown"
 	BuildTime   = "unknown"
