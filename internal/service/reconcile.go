@@ -45,6 +45,7 @@ func runReconciliation(ctx context.Context, oldPool, newPool *pgxpool.Pool, sour
 	if err != nil {
 		return nil, fmt.Errorf("reconciliation source query: %w", err)
 	}
+
 	targetValues, err := queryReconciliationRow(ctx, newPool, targetSQL, params)
 	if err != nil {
 		return nil, fmt.Errorf("reconciliation target query: %w", err)
@@ -54,6 +55,7 @@ func runReconciliation(ctx context.Context, oldPool, newPool *pgxpool.Pool, sour
 	for k, v := range sourceValues {
 		values[k] = v
 	}
+
 	for k, v := range targetValues {
 		values[k] = v
 	}
@@ -81,9 +83,11 @@ func evaluateReconciliationChecks(values map[string]any, checks []Reconciliation
 	result := &ReconciliationResult{Values: values}
 	for _, check := range checks {
 		left, leftOK := values[check.Left]
+
 		right, rightOK := values[check.Right]
 		if !leftOK || !rightOK {
 			result.Failed = append(result.Failed, fmt.Sprintf("%s or %s missing from reconciliation result", check.Left, check.Right))
+
 			continue
 		}
 
@@ -95,10 +99,12 @@ func evaluateReconciliationChecks(values map[string]any, checks []Reconciliation
 		cmp, comparable := compareReconciliationValues(left, right)
 		if !comparable {
 			result.Failed = append(result.Failed, fmt.Sprintf("%s (%v) and %s (%v) are not comparable numeric values", check.Left, left, check.Right, right))
+
 			continue
 		}
 
 		var passed bool
+
 		switch op {
 		case "=":
 			passed = cmp == 0
@@ -107,6 +113,7 @@ func evaluateReconciliationChecks(values map[string]any, checks []Reconciliation
 		default:
 			return nil, fmt.Errorf("reconciliation check has unknown op %q", op)
 		}
+
 		if !passed {
 			result.Failed = append(result.Failed, fmt.Sprintf("%s (%v) %s %s (%v) failed", check.Left, left, op, check.Right, right))
 		}
@@ -122,10 +129,12 @@ func evaluateReconciliationChecks(values map[string]any, checks []Reconciliation
 // malformed check referencing a non-numeric column).
 func compareReconciliationValues(left, right any) (int, bool) {
 	l, lok := toInt64(left)
+
 	r, rok := toInt64(right)
 	if !lok || !rok {
 		return 0, false
 	}
+
 	switch {
 	case l < r:
 		return -1, true
@@ -145,6 +154,7 @@ func toInt64(v any) (int64, bool) {
 	case int:
 		return int64(n), true
 	}
+
 	return 0, false
 }
 
@@ -154,11 +164,13 @@ func toInt64(v any) (int64, bool) {
 // referenced by this particular sql is simply not substituted.
 func queryReconciliationRow(ctx context.Context, pool *pgxpool.Pool, sql string, params map[string]any) (map[string]any, error) {
 	var args []any
+
 	for name, value := range params {
 		placeholder := ":" + name
 		if !strings.Contains(sql, placeholder) {
 			continue
 		}
+
 		args = append(args, value)
 		sql = strings.ReplaceAll(sql, placeholder, fmt.Sprintf("$%d", len(args)))
 	}

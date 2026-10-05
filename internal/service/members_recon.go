@@ -69,7 +69,9 @@ func (c *Converter) ReconcileMembers(ctx context.Context) (*ReconciliationResult
 	if err != nil {
 		return nil, err
 	}
+
 	params := map[string]any{"flow_ids": flowIDs}
+
 	return runReconciliation(ctx, c.oldDB.Pool(), c.newDB.Pool(), membersReconSourceSQL, membersReconTargetSQL, params, membersReconChecks)
 }
 
@@ -175,10 +177,13 @@ func (c *Converter) ReconcileMembersSyncMode(ctx context.Context) (*Reconciliati
 	if err != nil {
 		return nil, err
 	}
+
 	flowIDs, err := c.getConversationFlowIDs(ctx)
 	if err != nil {
 		return nil, err
 	}
+
 	params := map[string]any{"created_from": fromDate, "created_to": toDate, "session_id": c.sessionID, "flow_ids": flowIDs}
+
 	return runReconciliation(ctx, c.oldDB.Pool(), c.newDB.Pool(), membersSyncReconSourceSQL, membersSyncReconTargetSQL, params, membersSyncReconChecks)
 }

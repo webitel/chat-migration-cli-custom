@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
 	"github.com/webitel/chat-migration-cli-custom/internal/model/old"
 )
 
@@ -23,9 +24,8 @@ func NewConversationStore(db *DB) *ConversationStore {
 // closed_at: from <= closed_at < to. flowIDs restricts the result to
 // conversations whose props->>'flow' is in that list
 // (public.bot_mapping.old_bot_id).
-func (s *ConversationStore) GetGroupedConversationsByUsersAndFlowFromDate(ctx context.Context, lastSeenInitiatorID int, lastSeenFlowID int, limit int, from, to time.Time, flowIDs []int32) ([]*old.GroupedConversation, error) {
-	var (
-		query = `
+func (s *ConversationStore) GetGroupedConversationsByUsersAndFlowFromDate(ctx context.Context, lastSeenInitiatorID, lastSeenFlowID, limit int, from, to time.Time, flowIDs []int32) ([]*old.GroupedConversation, error) {
+	query := `
 		WITH conversations AS (SELECT conv.id id,
                               initiator.user_id       initiator,
                               (conv.props ->> 'flow') flow_id,
@@ -70,7 +70,7 @@ LEFT JOIN LATERAL (SELECT JSONB_AGG(users.user) internal_users
                                     AND ch.internal
                                   GROUP BY user_id) users) users ON true
 `
-	)
+
 	rows, err := s.db.Pool().Query(ctx, query, lastSeenInitiatorID, strconv.Itoa(lastSeenFlowID), from, to, limit, flowIDs)
 	if err != nil {
 		return nil, err

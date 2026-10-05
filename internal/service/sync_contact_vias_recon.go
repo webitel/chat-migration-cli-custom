@@ -72,5 +72,6 @@ var syncContactViasSyncReconChecks = []ReconciliationCheck{
 // facebook contacts during a sync run.
 func (c *Converter) ReconcileSyncContactViasSyncMode(ctx context.Context) (*ReconciliationResult, error) {
 	params := map[string]any{"session_id": c.sessionID}
+
 	return runTargetOnlyReconciliation(ctx, c.newDB.Pool(), syncContactViasSyncReconTargetSQL, params, syncContactViasSyncReconChecks)
 }

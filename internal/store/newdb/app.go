@@ -5,6 +5,7 @@ import (
 
 	"github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
+
 	"github.com/webitel/chat-migration-cli-custom/internal/model/new"
 )
 
@@ -20,18 +21,17 @@ func (s *AppStore) InsertApps(ctx context.Context, tx pgx.Tx, apps []*new.App) e
 	if len(apps) == 0 {
 		return nil
 	}
-	var (
-		query = squirrel.Insert("im_account.app").Columns(
-			"dc",
-			"id",
-			"name",
-			"about",
-			"config",
-			"created_at",
-			"updated_at",
-			"revoked_at",
-		).PlaceholderFormat(squirrel.Dollar)
-	)
+
+	query := squirrel.Insert("im_account.app").Columns(
+		"dc",
+		"id",
+		"name",
+		"about",
+		"config",
+		"created_at",
+		"updated_at",
+		"revoked_at",
+	).PlaceholderFormat(squirrel.Dollar)
 
 	for _, app := range apps {
 		query = query.Values(

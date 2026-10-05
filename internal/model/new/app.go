@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/gofrs/uuid/v5"
+	"github.com/gofrs/uuid/v5" //nolint:depguard // NewV7AtTime is not available in google/uuid
 )
 
 // App does NOT embed BaseModel: im_account.app's shape (about/config/revoked_at,
@@ -46,7 +46,7 @@ type ClientWeb struct {
 
 type JwtIdentity struct {
 	Enabled bool              `json:"enabled,omitempty"`
-	JwksUri string            `json:"jwksUri,omitempty"`
+	JwksURI string            `json:"jwksUri,omitempty"` //nolint:tagliatelle // camelCase is the stored config format
 	Jwks    []byte            `json:"jwks,omitempty"`
 	Claims  map[string]string `json:"claims,omitempty"`
 }
@@ -55,7 +55,7 @@ type AppServiceConfig struct {
 	// Secret is always left empty: old service_app.token's compatibility with
 	// this field is unconfirmed, so it is never carried over from the migration.
 	Secret      string          `json:"secret,omitempty"`
-	PushService json.RawMessage `json:"pushService,omitempty"`
-	SendUpdate  json.RawMessage `json:"sendUpdate,omitempty"`
-	RateLimits  json.RawMessage `json:"rateLimits,omitempty"`
+	PushService json.RawMessage `json:"pushService,omitempty"` //nolint:tagliatelle // camelCase is the stored config format
+	SendUpdate  json.RawMessage `json:"sendUpdate,omitempty"`  //nolint:tagliatelle // camelCase is the stored config format
+	RateLimits  json.RawMessage `json:"rateLimits,omitempty"`  //nolint:tagliatelle // camelCase is the stored config format
 }

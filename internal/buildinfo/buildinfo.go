@@ -17,5 +17,6 @@ var (
 // "1.0.0+dev" when built without the build script's linker flags.
 func Full() string {
 	full := Version + "+build." + BuildNumber + "." + GitCommit
+
 	return full
 }

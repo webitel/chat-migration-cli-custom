@@ -5,6 +5,7 @@ import (
 
 	"github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
+
 	modelnew "github.com/webitel/chat-migration-cli-custom/internal/model/new"
 )
 
@@ -38,5 +39,6 @@ func (s *DirectSettingsStore) InsertDirectSettings(ctx context.Context, tx pgx.T
 	}
 
 	_, err = tx.Exec(ctx, sql, args...)
+
 	return err
 }

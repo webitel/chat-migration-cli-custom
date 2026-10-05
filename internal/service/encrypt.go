@@ -48,5 +48,6 @@ func NewEncryptor(encryptionKey string) (*Encryptor, error) {
 func (e *Encryptor) EncryptToken(token string) (string, error) {
 	ciphertext := e.gcm.Seal(e.nonce, e.nonce, []byte(token), nil)
 	encryptedToken := base64.StdEncoding.EncodeToString(ciphertext)
+
 	return encryptedToken, nil
 }

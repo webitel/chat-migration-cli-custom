@@ -101,7 +101,9 @@ func (c *Converter) ReconcileClientsToContacts(ctx context.Context) (*Reconcilia
 	if err != nil {
 		return nil, err
 	}
+
 	params := map[string]any{"created_from": fromDate, "created_to": toDate, "session_id": c.sessionID}
+
 	return runReconciliation(ctx, c.oldDB.Pool(), c.newDB.Pool(), clientsReconSourceSQL, clientsReconTargetSQL, params, clientsReconChecks)
 }
 
@@ -117,6 +119,8 @@ func (c *Converter) ReconcileClientsToContactsSyncMode(ctx context.Context) (*Re
 	if err != nil {
 		return nil, err
 	}
+
 	params := map[string]any{"created_from": fromDate, "created_to": toDate, "session_id": c.sessionID}
+
 	return runReconciliation(ctx, c.oldDB.Pool(), c.newDB.Pool(), clientsReconSourceSQL, clientsReconSyncTargetSQL, params, clientsReconSyncChecks)
 }

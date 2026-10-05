@@ -90,11 +90,14 @@ func (c *Converter) ReconcileConversations(ctx context.Context) (*Reconciliation
 	if err != nil {
 		return nil, err
 	}
+
 	flowIDs, err := c.getConversationFlowIDs(ctx)
 	if err != nil {
 		return nil, err
 	}
+
 	params := map[string]any{"created_from": fromDate, "created_to": toDate, "session_id": c.sessionID, "flow_ids": flowIDs}
+
 	return runReconciliation(ctx, c.oldDB.Pool(), c.newDB.Pool(), conversationsReconSourceSQL, conversationsReconTargetSQL, params, conversationsReconChecks)
 }
 
@@ -109,10 +112,13 @@ func (c *Converter) ReconcileConversationsSyncMode(ctx context.Context) (*Reconc
 	if err != nil {
 		return nil, err
 	}
+
 	flowIDs, err := c.getConversationFlowIDs(ctx)
 	if err != nil {
 		return nil, err
 	}
+
 	params := map[string]any{"created_from": fromDate, "created_to": toDate, "session_id": c.sessionID, "flow_ids": flowIDs}
+
 	return runReconciliation(ctx, c.oldDB.Pool(), c.newDB.Pool(), conversationsSyncReconSourceSQL, conversationsSyncReconTargetSQL, params, conversationsSyncReconChecks)
 }

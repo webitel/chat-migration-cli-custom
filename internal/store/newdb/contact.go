@@ -4,8 +4,9 @@ import (
 	"context"
 
 	"github.com/Masterminds/squirrel"
-	"github.com/gofrs/uuid/v5"
+	"github.com/gofrs/uuid/v5" //nolint:depguard // NewV7AtTime is not available in google/uuid
 	"github.com/jackc/pgx/v5"
+
 	"github.com/webitel/chat-migration-cli-custom/internal/model/new"
 )
 
@@ -21,22 +22,21 @@ func (s *ContactStore) InsertContacts(ctx context.Context, tx pgx.Tx, contacts [
 	if len(contacts) == 0 {
 		return nil
 	}
-	var (
-		query = squirrel.Insert("im_contact.contact").Columns(
-			"id",
-			"domain_id",
-			"created_at",
-			"updated_at",
-			"issuer_id",
-			"application_id",
-			"subject_id",
-			"type",
-			"name",
-			"username",
-			"metadata",
-			"is_bot",
-		).PlaceholderFormat(squirrel.Dollar)
-	)
+
+	query := squirrel.Insert("im_contact.contact").Columns(
+		"id",
+		"domain_id",
+		"created_at",
+		"updated_at",
+		"issuer_id",
+		"application_id",
+		"subject_id",
+		"type",
+		"name",
+		"username",
+		"metadata",
+		"is_bot",
+	).PlaceholderFormat(squirrel.Dollar)
 
 	for _, contact := range contacts {
 		query = query.Values(
@@ -66,7 +66,6 @@ func (s *ContactStore) InsertContacts(ctx context.Context, tx pgx.Tx, contacts [
 	}
 
 	return nil
-
 }
 
 // insertContactsIgnoreConflictsResult is one row of
@@ -104,24 +103,23 @@ func (s *ContactStore) InsertContactsIgnoreConflicts(ctx context.Context, tx pgx
 	if len(contacts) == 0 {
 		return 0, nil
 	}
-	var (
-		query = squirrel.Insert("im_contact.contact").Columns(
-			"id",
-			"domain_id",
-			"created_at",
-			"updated_at",
-			"issuer_id",
-			"application_id",
-			"subject_id",
-			"type",
-			"name",
-			"username",
-			"metadata",
-			"is_bot",
-		).PlaceholderFormat(squirrel.Dollar).Suffix(
-			"ON CONFLICT (domain_id, issuer_id, subject_id) DO UPDATE SET id = im_contact.contact.id " +
-				"RETURNING id, domain_id, issuer_id, subject_id, (xmax = 0) AS inserted",
-		)
+
+	query := squirrel.Insert("im_contact.contact").Columns(
+		"id",
+		"domain_id",
+		"created_at",
+		"updated_at",
+		"issuer_id",
+		"application_id",
+		"subject_id",
+		"type",
+		"name",
+		"username",
+		"metadata",
+		"is_bot",
+	).PlaceholderFormat(squirrel.Dollar).Suffix(
+		"ON CONFLICT (domain_id, issuer_id, subject_id) DO UPDATE SET id = im_contact.contact.id " +
+			"RETURNING id, domain_id, issuer_id, subject_id, (xmax = 0) AS inserted",
 	)
 
 	for _, contact := range contacts {
@@ -150,19 +148,23 @@ func (s *ContactStore) InsertContactsIgnoreConflicts(ctx context.Context, tx pgx
 	if err != nil {
 		return 0, err
 	}
+
 	results, err := pgx.CollectRows(rows, pgx.RowToStructByName[insertContactsIgnoreConflictsResult])
 	if err != nil {
 		return 0, err
 	}
 
 	resolved := make(map[contactKey]uuid.UUID, len(results))
+
 	var inserted int64
+
 	for _, r := range results {
 		resolved[contactKey{DomainID: r.DomainID, IssuerID: r.IssuerID, SubjectID: r.SubjectID}] = r.ID
 		if r.Inserted {
 			inserted++
 		}
 	}
+
 	for _, contact := range contacts {
 		contact.ID = resolved[contactKey{DomainID: contact.DomainID, IssuerID: contact.IssuerID, SubjectID: contact.SubjectID}]
 	}
@@ -184,10 +186,12 @@ SELECT contact_id, gate_id
 FROM chain
 ON CONFLICT (contact_id, via) DO NOTHING;
 `
+
 	tag, err := tx.Exec(ctx, query)
 	if err != nil {
 		return 0, err
 	}
+
 	return tag.RowsAffected(), nil
 }
 
@@ -195,12 +199,12 @@ func (s *ContactStore) GetByWebitelUserIDs(ctx context.Context, tx pgx.Tx, webit
 	if len(webitelUserIDs) == 0 {
 		return nil, nil
 	}
-	var (
-		query = `
+
+	query := `
 		SELECT id, domain_id, created_at, updated_at, issuer_id, application_id, subject_id, type, name, username, metadata, is_bot
 		FROM im_contact.contact
 		WHERE subject_id = ANY($1::text[]) AND issuer_id = 'webitel' AND is_bot = false`
-	)
+
 	rows, err := tx.Query(ctx, query, webitelUserIDs)
 	if err != nil {
 		return nil, err
@@ -211,5 +215,6 @@ func (s *ContactStore) GetByWebitelUserIDs(ctx context.Context, tx pgx.Tx, webit
 	if err != nil {
 		return nil, err
 	}
+
 	return result, nil
 }

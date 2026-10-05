@@ -4,7 +4,8 @@ import (
 	"context"
 	"strconv"
 
-	"github.com/gofrs/uuid/v5"
+	"github.com/gofrs/uuid/v5" //nolint:depguard // NewV7AtTime is not available in google/uuid
+
 	modelnew "github.com/webitel/chat-migration-cli-custom/internal/model/new"
 )
 
@@ -25,6 +26,7 @@ func (c *Converter) MigrateFacebookProviders(ctx context.Context) error {
 
 	fail := func(cause error) error {
 		_ = c.newDB.MigrationStore().MarkStepFailed(ctx, c.sessionID, StepFacebookAndWhatsApp, 0, cause.Error())
+
 		return cause
 	}
 
@@ -32,11 +34,13 @@ func (c *Converter) MigrateFacebookProviders(ctx context.Context) error {
 	if err != nil {
 		return fail(err)
 	}
+
 	if len(gateMappings) == 0 {
 		return nil
 	}
 
 	flowIDs := make([]int, 0, len(gateMappings))
+
 	gateByFlowID := make(map[int]uuid.UUID, len(gateMappings))
 	for _, m := range gateMappings {
 		flowIDs = append(flowIDs, m.OldBotID)
@@ -49,6 +53,7 @@ func (c *Converter) MigrateFacebookProviders(ctx context.Context) error {
 	}
 
 	migrationRows := make([]*modelnew.MigrationRow, 0, len(providers))
+
 	matchedFlowIDs := make(map[int]struct{}, len(providers))
 	for _, p := range providers {
 		matchedFlowIDs[p.FlowID] = struct{}{}
@@ -60,6 +65,7 @@ func (c *Converter) MigrateFacebookProviders(ctx context.Context) error {
 			DomainID:   botMappingDomainID,
 		})
 	}
+
 	for flowID := range gateByFlowID {
 		if _, ok := matchedFlowIDs[flowID]; !ok {
 			c.log.Warn("bot_mapping.gate_id is set but no matching chat.bot row found for flow_id, skipping", "flow_id", flowID)
@@ -72,7 +78,8 @@ func (c *Converter) MigrateFacebookProviders(ctx context.Context) error {
 	}
 
 	if err := c.newDB.MigrationStore().InsertMigrations(ctx, tx, c.sessionID, migrationRows); err != nil {
-		tx.Rollback(ctx)
+		_ = tx.Rollback(ctx)
+
 		return fail(err)
 	}
 
@@ -81,6 +88,7 @@ func (c *Converter) MigrateFacebookProviders(ctx context.Context) error {
 	}
 
 	c.addRecordsMigrated(len(migrationRows))
+
 	return nil
 }
 
@@ -89,7 +97,8 @@ func (c *Converter) MigrateFacebookProviders(ctx context.Context) error {
 // sync run. If bot_mapping gains new gate_id values later, re-run the
 // full-mode step (MIGRATION_START_FROM_STEP/MIGRATION_SINGLE_STEP), after
 // manually removing the rows it previously created.
-func (c *Converter) MigrateFacebookProvidersSyncMode(ctx context.Context) error {
+func (c *Converter) MigrateFacebookProvidersSyncMode(_ context.Context) error {
 	c.log.Info("facebook/whatsapp providers sync step is a no-op; gates are migrated once in full mode from public.bot_mapping")
+
 	return nil
 }

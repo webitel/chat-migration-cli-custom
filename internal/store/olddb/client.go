@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
 	"github.com/webitel/chat-migration-cli-custom/internal/model/old"
 )
 
@@ -23,9 +24,8 @@ func NewClientStore(db *DB) *ClientStore {
 // result to clients whose type is in that list (in addition to the
 // unconditional exclusion of portal clients, which are migrated by a
 // separate step).
-func (s *ClientStore) GetFromDate(ctx context.Context, afterID int, limit int, from, to time.Time, types []string) ([]*old.Client, error) {
-	var (
-		query = `SELECT
+func (s *ClientStore) GetFromDate(ctx context.Context, afterID, limit int, from, to time.Time, types []string) ([]*old.Client, error) {
+	query := `SELECT
     id,
        name,
        number,
@@ -49,13 +49,15 @@ AND c.created_at >= $3::timestamp
 AND c.created_at < $4::timestamp
 AND c.id > $1
 ORDER BY c.id LIMIT $2`
-	)
+
 	if afterID < 0 {
 		afterID = 0
 	}
+
 	if limit < 1 {
 		limit = 1
 	}
+
 	rows, err := s.db.Pool().Query(ctx, query, afterID, limit, from, to, types)
 	if err != nil {
 		return nil, err
@@ -76,9 +78,8 @@ ORDER BY c.id LIMIT $2`
 // clients whose chat.channel.props->>'flow' matches one of
 // public.bot_mapping.old_bot_id where type = 'portal' -- this excludes
 // 'portal'-type chat.client rows belonging to the Agent app.
-func (s *ClientStore) GetPortalClientsFromDate(ctx context.Context, offset int, limit int, from, to time.Time, flowIDs []int32) ([]*old.PortalClient, error) {
-	var (
-		query = `SELECT c.id,
+func (s *ClientStore) GetPortalClientsFromDate(ctx context.Context, offset, limit int, from, to time.Time, flowIDs []int32) ([]*old.PortalClient, error) {
+	query := `SELECT c.id,
 					c.name AS name,
 					null AS number,
 					acc.created_at AS created_at,
@@ -101,14 +102,17 @@ func (s *ClientStore) GetPortalClientsFromDate(ctx context.Context, offset int, 
 					  AND (ch.props ->> 'flow')::int = ANY($5::int[])
 				  )
 				ORDER BY c.id`
-	)
+
 	if offset < 0 {
 		offset = 0
 	}
+
 	if limit < 1 {
 		limit = 1
 	}
+
 	query += ` OFFSET $1 LIMIT $2`
+
 	rows, err := s.db.Pool().Query(ctx, query, offset, limit, from, to, flowIDs)
 	if err != nil {
 		return nil, err

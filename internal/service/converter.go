@@ -8,8 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gofrs/uuid/v5"
+	"github.com/gofrs/uuid/v5" //nolint:depguard // NewV7AtTime is not available in google/uuid
 	"github.com/jackc/pgx/v5"
+
 	modelnew "github.com/webitel/chat-migration-cli-custom/internal/model/new"
 	"github.com/webitel/chat-migration-cli-custom/internal/store/newdb"
 	"github.com/webitel/chat-migration-cli-custom/internal/store/olddb"
@@ -70,6 +71,7 @@ func (r *Resolver) ResolveMigrationRow(ctx context.Context, tx pgx.Tx, entityTyp
 	if extraKey != nil {
 		filters.ExtraKeys = []string{*extraKey}
 	}
+
 	return r.db.MigrationStore().GetMigrationRow(ctx, tx, filters)
 }
 
@@ -108,15 +110,19 @@ func (c *Converter) completeStep(ctx context.Context, step MigrationStep) error 
 		if err != nil {
 			return fmt.Errorf("reconciliation for step %q: %w", step.Name, err)
 		}
+
 		c.log.Info("reconciliation result", "step", step.Name, "passed", result.Passed(), "values", result.Values)
+
 		if !result.Passed() {
 			errMsg := strings.Join(result.Failed, "; ")
 			if err := c.newDB.MigrationStore().MarkStepReconFailed(ctx, c.sessionID, step.Name, errMsg); err != nil {
 				return err
 			}
+
 			return fmt.Errorf("reconciliation failed for step %q: %s", step.Name, errMsg)
 		}
 	}
+
 	return c.newDB.MigrationStore().MarkStepCompleted(ctx, c.sessionID, step.Name)
 }
 
@@ -128,7 +134,7 @@ type StepDuration struct {
 	RecordsMigrated int64
 }
 
-func NewConverter(oldDB *olddb.DB, modelnewDB *newdb.DB, encryptor *Encryptor, isSyncMode bool, migratePortalClients bool, portalChatIssuerID string, sessionID uuid.UUID) *Converter {
+func NewConverter(oldDB *olddb.DB, modelnewDB *newdb.DB, encryptor *Encryptor, isSyncMode, migratePortalClients bool, portalChatIssuerID string, sessionID uuid.UUID) *Converter {
 	return &Converter{
 		log:                  slog.Default(),
 		oldDB:                oldDB,
@@ -167,12 +173,15 @@ func (c *Converter) runSingleStep(ctx context.Context, stepName string) error {
 	}
 
 	var step *MigrationStep
+
 	for i := range steps {
 		if steps[i].Name == stepName {
 			step = &steps[i]
+
 			break
 		}
 	}
+
 	if step == nil {
 		return fmt.Errorf("unknown migration step: %s", stepName)
 	}
@@ -182,6 +191,7 @@ func (c *Converter) runSingleStep(ctx context.Context, stepName string) error {
 		if err != nil {
 			return err
 		}
+
 		if _, ok := completed[step.Name]; ok {
 			return fmt.Errorf("migration step %q is already completed; re-run is not supported outside sync mode - restore the target database and retry", step.Name)
 		}
@@ -193,17 +203,23 @@ func (c *Converter) runSingleStep(ctx context.Context, stepName string) error {
 
 	c.log.Info("migration step started", "step", step.Name)
 	c.resetStepRecordsMigrated()
+
 	stepStart := time.Now()
+
 	if err := step.Run(ctx); err != nil {
 		return err
 	}
+
 	duration := time.Since(stepStart)
+
 	recordsMigrated := c.stepRecordsMigrated
 	if err := c.completeStep(ctx, *step); err != nil {
 		return err
 	}
+
 	c.log.Info("migration step completed", "step", step.Name)
 	c.logStepDurations([]StepDuration{{Name: step.Name, Duration: duration, RecordsMigrated: recordsMigrated}})
+
 	return nil
 }
 
@@ -211,6 +227,7 @@ func (c *Converter) runStepsFrom(ctx context.Context, startFrom string) error {
 	if startFrom == "" {
 		return errors.New("step requires to start from it")
 	}
+
 	var (
 		steps     []MigrationStep
 		completed map[string]struct{}
@@ -220,9 +237,9 @@ func (c *Converter) runStepsFrom(ctx context.Context, startFrom string) error {
 	if c.isSyncMode {
 		steps = c.getSyncModeMigrationSteps()
 		completed = make(map[string]struct{})
-
 	} else {
 		steps = c.getMigrationSteps()
+
 		completed, err = c.newDB.MigrationStore().GetCompletedSteps(ctx, c.sessionID)
 		if err != nil {
 			return err
@@ -233,23 +250,29 @@ func (c *Converter) runStepsFrom(ctx context.Context, startFrom string) error {
 		firstStepIndex int
 		found          bool
 	)
+
 	for i, step := range steps {
-		if step.Name == startFrom {
-			found = true
-			if _, alreadyCompleted := completed[step.Name]; alreadyCompleted {
-				if i > 0 {
-					for s, nextUncompletedStep := range steps[i-1:] {
-						if _, alreadyCompleted := completed[nextUncompletedStep.Name]; !alreadyCompleted {
-							firstStepIndex = s
-							break
-						}
+		if step.Name != startFrom {
+			continue
+		}
+
+		found = true
+
+		if _, alreadyCompleted := completed[step.Name]; alreadyCompleted {
+			if i > 0 {
+				for s, nextUncompletedStep := range steps[i-1:] {
+					if _, alreadyCompleted := completed[nextUncompletedStep.Name]; !alreadyCompleted {
+						firstStepIndex = s
+
+						break
 					}
 				}
-			} else {
-				firstStepIndex = i
 			}
-			break
+		} else {
+			firstStepIndex = i
 		}
+
+		break
 	}
 
 	if !found {
@@ -260,30 +283,40 @@ func (c *Converter) runStepsFrom(ctx context.Context, startFrom string) error {
 	for _, step := range steps[firstStepIndex:] {
 		if _, ok := completed[step.Name]; ok {
 			c.log.Info("migration step already completed, skipping", "step", step.Name)
+
 			continue
 		}
 
 		if err := c.ensureSession(ctx, step.Name); err != nil {
 			c.logStepDurations(durations)
+
 			return err
 		}
 
 		c.log.Info("migration step started", "step", step.Name)
 		c.resetStepRecordsMigrated()
+
 		stepStart := time.Now()
+
 		if err := step.Run(ctx); err != nil {
 			c.logStepDurations(durations)
+
 			return err
 		}
+
 		durations = append(durations, StepDuration{Name: step.Name, Duration: time.Since(stepStart), RecordsMigrated: c.stepRecordsMigrated})
 
 		if err := c.completeStep(ctx, step); err != nil {
 			c.logStepDurations(durations)
+
 			return err
 		}
+
 		c.log.Info("migration step completed", "step", step.Name)
 	}
+
 	c.logStepDurations(durations)
+
 	return nil
 }
 
@@ -297,9 +330,9 @@ func (c *Converter) runSteps(ctx context.Context) error {
 	if c.isSyncMode {
 		steps = c.getSyncModeMigrationSteps()
 		completed = make(map[string]struct{})
-
 	} else {
 		steps = c.getMigrationSteps()
+
 		completed, err = c.newDB.MigrationStore().GetCompletedSteps(ctx, c.sessionID)
 		if err != nil {
 			return err
@@ -310,30 +343,40 @@ func (c *Converter) runSteps(ctx context.Context) error {
 	for _, step := range steps {
 		if _, ok := completed[step.Name]; ok {
 			c.log.Info("migration step already completed, skipping", "step", step.Name)
+
 			continue
 		}
 
 		if err := c.ensureSession(ctx, step.Name); err != nil {
 			c.logStepDurations(durations)
+
 			return err
 		}
 
 		c.log.Info("migration step started", "step", step.Name)
 		c.resetStepRecordsMigrated()
+
 		stepStart := time.Now()
+
 		if err := step.Run(ctx); err != nil {
 			c.logStepDurations(durations)
+
 			return err
 		}
+
 		durations = append(durations, StepDuration{Name: step.Name, Duration: time.Since(stepStart), RecordsMigrated: c.stepRecordsMigrated})
 
 		if err := c.completeStep(ctx, step); err != nil {
 			c.logStepDurations(durations)
+
 			return err
 		}
+
 		c.log.Info("migration step completed", "step", step.Name)
 	}
+
 	c.logStepDurations(durations)
+
 	return nil
 }
 
@@ -351,6 +394,7 @@ func (c *Converter) ensureSession(ctx context.Context, stepName string) error {
 	if stepName == StepClientsToContacts || stepName == SyncStepClientsToContacts {
 		return c.newDB.MigrationStore().CreateSession(ctx, c.sessionID, mode)
 	}
+
 	return c.newDB.MigrationStore().CheckSession(ctx, c.sessionID, mode)
 }
 
@@ -371,6 +415,7 @@ func (c *Converter) logStepDurations(durations []StepDuration) {
 	if len(durations) == 0 {
 		return
 	}
+
 	var (
 		total        time.Duration
 		totalRecords int64
@@ -380,6 +425,7 @@ func (c *Converter) logStepDurations(durations []StepDuration) {
 		totalRecords += d.RecordsMigrated
 		c.log.Info("migration step duration", "step", d.Name, "duration", d.Duration.String(), "records_migrated", d.RecordsMigrated)
 	}
+
 	c.log.Info("migration duration summary", "steps", len(durations), "total_duration", total.String(), "total_records_migrated", totalRecords)
 }
 
@@ -390,6 +436,7 @@ func (c *Converter) getMigrationSteps() []MigrationStep {
 	if c.migratePortalClients {
 		steps = append(steps, MigrationStep{Name: StepPortalClientsToContacts, Run: c.MigratePortalClientsToContacts, Reconcile: c.ReconcilePortalClientsToContacts})
 	}
+
 	steps = append(steps, []MigrationStep{
 		{Name: StepBotsToContacts, Run: c.MigrateBotsToContacts, Reconcile: c.ReconcileBotsToContacts},
 		{Name: StepConversations, Run: c.MigrateConversations, Reconcile: c.ReconcileConversations},
@@ -398,8 +445,10 @@ func (c *Converter) getMigrationSteps() []MigrationStep {
 		{Name: StepFacebookAndWhatsApp, Run: c.MigrateFacebookProviders, Reconcile: c.ReconcileFacebookProviders},
 		{Name: StepSyncContactVias, Run: c.SyncContactsVias, Reconcile: c.ReconcileSyncContactVias},
 	}...)
+
 	return steps
 }
+
 func (c *Converter) getSyncModeMigrationSteps() []MigrationStep {
 	steps := []MigrationStep{
 		{Name: SyncStepClientsToContacts, Run: c.MigrateClientsToContactsSyncMode, Reconcile: c.ReconcileClientsToContactsSyncMode},
@@ -407,6 +456,7 @@ func (c *Converter) getSyncModeMigrationSteps() []MigrationStep {
 	if c.migratePortalClients {
 		steps = append(steps, MigrationStep{Name: SyncStepPortalClientsToContacts, Run: c.MigratePortalClientsToContactsSyncMode, Reconcile: c.ReconcilePortalClientsToContactsSyncMode})
 	}
+
 	steps = append(steps, []MigrationStep{
 		{Name: SyncStepBotsToContacts, Run: c.MigrateBotsToContactsSyncMode},
 		{Name: SyncStepConversations, Run: c.MigrateConversationsSyncMode, Reconcile: c.ReconcileConversationsSyncMode},
@@ -415,6 +465,7 @@ func (c *Converter) getSyncModeMigrationSteps() []MigrationStep {
 		{Name: SyncStepFacebookAndWhatsApp, Run: c.MigrateFacebookProvidersSyncMode},
 		{Name: SyncStepSyncContactVias, Run: c.SyncContactsVias, Reconcile: c.ReconcileSyncContactViasSyncMode},
 	}...)
+
 	return steps
 }
 
@@ -439,6 +490,7 @@ func (c *Converter) GetMigrationWindow(ctx context.Context) (fromDate, toDate ti
 	if err != nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("resolving previous sync session: %w", err)
 	}
+
 	if prevSync != nil {
 		return *prevSync, toDate, nil
 	}
@@ -447,6 +499,7 @@ func (c *Converter) GetMigrationWindow(ctx context.Context) (fromDate, toDate ti
 	if err != nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("resolving last full session: %w", err)
 	}
+
 	if lastFull != nil {
 		return *lastFull, toDate, nil
 	}
@@ -466,9 +519,11 @@ func (c *Converter) getConversationFlowIDs(ctx context.Context) ([]int32, error)
 	if err != nil {
 		return nil, err
 	}
+
 	if len(flowIDs) == 0 {
 		return nil, errors.New("public.bot_mapping has no rows -- populate it with flow_id mappings before migrating conversations")
 	}
+
 	return flowIDs, nil
 }
 
@@ -484,5 +539,6 @@ func PagerFunc(ctx context.Context, perPage int, do func(ctx context.Context, of
 			return err
 		}
 	}
+
 	return nil
 }
