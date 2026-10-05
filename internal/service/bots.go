@@ -6,7 +6,7 @@ import (
 	"strconv"
 
 	"github.com/google/uuid"
-	modelnew "github.com/webitel/chat-migration-cli/internal/model/new"
+	modelnew "github.com/webitel/chat-migration-cli-custom/internal/model/new"
 )
 
 // botMappingDomainID is the domain_id recorded for every chat_migration row

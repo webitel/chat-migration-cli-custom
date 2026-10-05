@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
-	"github.com/webitel/chat-migration-cli/internal/model/old"
+	"github.com/webitel/chat-migration-cli-custom/internal/model/old"
 )
 
 type MessageStore struct {

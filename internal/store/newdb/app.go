@@ -5,7 +5,7 @@ import (
 
 	"github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
-	"github.com/webitel/chat-migration-cli/internal/model/new"
+	"github.com/webitel/chat-migration-cli-custom/internal/model/new"
 )
 
 type AppStore struct {

@@ -10,8 +10,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/rivo/uniseg"
-	modelnew "github.com/webitel/chat-migration-cli/internal/model/new"
-	modelold "github.com/webitel/chat-migration-cli/internal/model/old"
+	modelnew "github.com/webitel/chat-migration-cli-custom/internal/model/new"
+	modelold "github.com/webitel/chat-migration-cli-custom/internal/model/old"
 )
 
 func (c *Converter) MigrateMessages(ctx context.Context) error {

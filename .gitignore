@@ -15,4 +15,4 @@ __debug_server
 __debug_bin*
 
 # Build output
-chat-migration-cli
+chat-migration-cli-custom

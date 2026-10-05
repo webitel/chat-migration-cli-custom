@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	modelnew "github.com/webitel/chat-migration-cli/internal/model/new"
-	"github.com/webitel/chat-migration-cli/internal/model/old"
+	modelnew "github.com/webitel/chat-migration-cli-custom/internal/model/new"
+	"github.com/webitel/chat-migration-cli-custom/internal/model/old"
 )
 
 const (
