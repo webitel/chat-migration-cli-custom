@@ -8,7 +8,7 @@ import (
 	"github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	modelnew "github.com/webitel/chat-migration-cli/internal/model/new"
+	modelnew "github.com/webitel/chat-migration-cli-custom/internal/model/new"
 )
 
 type ThreadDialogStore struct {

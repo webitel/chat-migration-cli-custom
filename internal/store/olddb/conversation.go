@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/webitel/chat-migration-cli/internal/model/old"
+	"github.com/webitel/chat-migration-cli-custom/internal/model/old"
 )
 
 type ConversationStore struct {

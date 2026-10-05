@@ -5,7 +5,7 @@ import (
 
 	"github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
-	modelnew "github.com/webitel/chat-migration-cli/internal/model/new"
+	modelnew "github.com/webitel/chat-migration-cli-custom/internal/model/new"
 )
 
 type DirectSettingsStore struct {

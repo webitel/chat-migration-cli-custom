@@ -6,7 +6,7 @@ import (
 
 	"github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
-	newmodel "github.com/webitel/chat-migration-cli/internal/model/new"
+	newmodel "github.com/webitel/chat-migration-cli-custom/internal/model/new"
 )
 
 type ThreadStore struct {

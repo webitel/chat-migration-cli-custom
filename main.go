@@ -12,10 +12,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/viper"
-	"github.com/webitel/chat-migration-cli/internal/buildinfo"
-	"github.com/webitel/chat-migration-cli/internal/service"
-	"github.com/webitel/chat-migration-cli/internal/store/newdb"
-	"github.com/webitel/chat-migration-cli/internal/store/olddb"
+	"github.com/webitel/chat-migration-cli-custom/internal/buildinfo"
+	"github.com/webitel/chat-migration-cli-custom/internal/service"
+	"github.com/webitel/chat-migration-cli-custom/internal/store/newdb"
+	"github.com/webitel/chat-migration-cli-custom/internal/store/olddb"
 )
 
 // config holds all runtime configuration loaded from environment variables.
@@ -127,7 +127,7 @@ func main() {
 // printVersion prints version and local build information and exits without
 // touching configuration or any database.
 func printVersion() {
-	fmt.Printf("chat-migration-cli %s\n", buildinfo.Full())
+	fmt.Printf("chat-migration-cli-custom %s\n", buildinfo.Full())
 	fmt.Printf("commit: %s\n", buildinfo.GitCommit)
 	fmt.Printf("built: %s\n", buildinfo.BuildTime)
 }

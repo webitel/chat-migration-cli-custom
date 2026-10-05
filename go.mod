@@ -1,4 +1,4 @@
-module github.com/webitel/chat-migration-cli
+module github.com/webitel/chat-migration-cli-custom
 
 go 1.25.3
 

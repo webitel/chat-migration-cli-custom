@@ -5,7 +5,7 @@ import (
 	"strconv"
 
 	"github.com/google/uuid"
-	modelnew "github.com/webitel/chat-migration-cli/internal/model/new"
+	modelnew "github.com/webitel/chat-migration-cli-custom/internal/model/new"
 )
 
 // MigrateFacebookProviders does not create gates, meta apps or bots: those

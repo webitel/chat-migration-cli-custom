@@ -1,4 +1,4 @@
-# chat-migration-cli
+# chat-migration-cli-custom
 
 A CLI tool that migrates data from the legacy monolithic chat service database to the new microservices database. Both sources are PostgreSQL.
 
@@ -118,7 +118,7 @@ MIGRATION_OLD_DB_DSN="postgres://..." \
 MIGRATION_NEW_DB_DSN="postgres://..." \
 MIGRATION_ENCRYPTION_KEY="<32-character-key>" \
 MIGRATION_SESSION_ID="$(uuidgen)" \
-./chat-migration-cli
+./chat-migration-cli-custom
 
 # Incremental sync (safe to run repeatedly, use a new MIGRATION_SESSION_ID each run)
 MIGRATION_OLD_DB_DSN="postgres://..." \
@@ -126,7 +126,7 @@ MIGRATION_NEW_DB_DSN="postgres://..." \
 MIGRATION_ENCRYPTION_KEY="<32-character-key>" \
 MIGRATION_SESSION_ID="$(uuidgen)" \
 MIGRATION_SYNC_MODE=true \
-./chat-migration-cli
+./chat-migration-cli-custom
 
 # Resume from a specific step (use the same MIGRATION_SESSION_ID as the run being resumed)
 MIGRATION_OLD_DB_DSN="postgres://..." \
@@ -134,7 +134,7 @@ MIGRATION_NEW_DB_DSN="postgres://..." \
 MIGRATION_ENCRYPTION_KEY="<32-character-key>" \
 MIGRATION_SESSION_ID="<session-id-from-the-original-run>" \
 MIGRATION_START_FROM_STEP=messages \
-./chat-migration-cli
+./chat-migration-cli-custom
 
 # Run exactly one step, then stop (fails if the step is already completed outside sync mode)
 MIGRATION_OLD_DB_DSN="postgres://..." \
@@ -143,7 +143,7 @@ MIGRATION_ENCRYPTION_KEY="<32-character-key>" \
 MIGRATION_SESSION_ID="<session-id-from-the-original-run>" \
 MIGRATION_START_FROM_STEP=messages \
 MIGRATION_SINGLE_STEP=true \
-./chat-migration-cli
+./chat-migration-cli-custom
 
 # With debug logging
 MIGRATION_LOG_LEVEL=debug \
@@ -161,7 +161,7 @@ The tool auto-creates two tracking tables (`chat_migration` and `chat_migration_
 ## Building
 
 ```sh
-go build -o chat-migration-cli .
+go build -o chat-migration-cli-custom .
 ```
 
 For a local Debian/Linux (amd64) build with version metadata embedded (application version, build number, git commit, build time, dirty flag), use the provided PowerShell script instead:
@@ -170,4 +170,4 @@ For a local Debian/Linux (amd64) build with version metadata embedded (applicati
 .\build.ps1
 ```
 
-It produces `chat-migration-cli` in the project root. Run `chat-migration-cli --version` to print the embedded version information; this does not require any configuration or database connection.
+It produces `chat-migration-cli-custom` in the project root. Run `chat-migration-cli-custom --version` to print the embedded version information; this does not require any configuration or database connection.
