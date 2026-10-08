@@ -35,6 +35,7 @@ type config struct {
 	Sync                 bool       // SYNC_MODE
 	MigratePortalClients bool       // MIGRATE_PORTAL_CLIENTS
 	PortalChatIssuerID   string     // PORTAL_CHAT_ISSUER_ID: required if MIGRATE_PORTAL_CLIENTS is enabled
+	PortalClientType     string     // PORTAL_CLIENT_TYPE: contact type of migrated portal clients, required if MIGRATE_PORTAL_CLIENTS is enabled
 	SessionID            uuid.UUID  // required: SESSION_ID, identifies the records created by this migration cycle
 }
 
@@ -120,7 +121,7 @@ func run(cfg config, log *slog.Logger) error {
 
 	log.Info("migration session started", "session_id", cfg.SessionID)
 
-	converter := service.NewConverter(srcDB, dstDB, encryptor, cfg.Sync, cfg.MigratePortalClients, cfg.PortalChatIssuerID, cfg.SessionID)
+	converter := service.NewConverter(srcDB, dstDB, encryptor, cfg.Sync, cfg.MigratePortalClients, cfg.PortalChatIssuerID, cfg.PortalClientType, cfg.SessionID)
 
 	var runErr error
 
@@ -224,6 +225,7 @@ func mustLoadConfig() config {
 	v.SetDefault("SYNC_MODE", false)
 	v.SetDefault("MIGRATE_PORTAL_CLIENTS", false)
 	v.SetDefault("PORTAL_CHAT_ISSUER_ID", "")
+	v.SetDefault("PORTAL_CLIENT_TYPE", "")
 
 	oldDSN := v.GetString("OLD_DB_DSN")
 	newDSN := v.GetString("NEW_DB_DSN")
@@ -262,6 +264,12 @@ func mustLoadConfig() config {
 		os.Exit(1)
 	}
 
+	portalClientType := v.GetString("PORTAL_CLIENT_TYPE")
+	if migratePortalClients && portalClientType == "" {
+		slog.Error("MIGRATION_PORTAL_CLIENT_TYPE is required when MIGRATION_MIGRATE_PORTAL_CLIENTS is enabled")
+		os.Exit(1)
+	}
+
 	sessionIDRaw := v.GetString("SESSION_ID")
 	if sessionIDRaw == "" {
 		slog.Error("MIGRATION_SESSION_ID is required")
@@ -287,6 +295,7 @@ func mustLoadConfig() config {
 		Sync:                 v.GetBool("SYNC_MODE"),
 		MigratePortalClients: migratePortalClients,
 		PortalChatIssuerID:   portalChatIssuerID,
+		PortalClientType:     portalClientType,
 		SessionID:            sessionID,
 	}
 }

@@ -65,6 +65,8 @@ All options are read from environment variables prefixed with `MIGRATION_`.
 | `MIGRATION_NEW_DB_MAX_CONNS` | no | `10` | Connection pool size for the new DB |
 | `MIGRATION_SYNC_MODE` | no | `false` | Run in sync mode instead of full migration mode |
 | `MIGRATION_MIGRATE_PORTAL_CLIENTS` | no | `false` | Include portal clients in the migration (runs the `portal_client_to_contact` step). When enabled, consider adding an index on the legacy database's `portal.identity` table to speed up that step. See "Portal client migration index" below. |
+| `MIGRATION_PORTAL_CHAT_ISSUER_ID` | if portal clients are migrated | — | Issuer ID assigned to migrated portal clients. Required when `MIGRATION_MIGRATE_PORTAL_CLIENTS` is enabled |
+| `MIGRATION_PORTAL_CLIENT_TYPE` | if portal clients are migrated | — | Contact type (`im_contact.contact.type`) assigned to migrated portal clients. Required when `MIGRATION_MIGRATE_PORTAL_CLIENTS` is enabled |
 | `MIGRATION_START_FROM_STEP` | no | _(all)_ | Start from this step, skipping earlier ones |
 | `MIGRATION_SINGLE_STEP` | no | `false` | Run only the step named by `MIGRATION_START_FROM_STEP`, then stop. Requires `MIGRATION_START_FROM_STEP` to be set. Resumes a not-yet-completed step from its last saved progress; fails if the step is already completed (outside sync mode - sync-mode steps remain re-runnable) |
 | `MIGRATION_LOG_LEVEL` | no | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |

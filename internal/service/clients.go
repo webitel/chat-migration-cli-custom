@@ -289,7 +289,7 @@ func (c *Converter) MigratePortalClientsToContacts(ctx context.Context) error {
 
 		iterate := true
 
-		clients, err := c.oldDB.ClientStore().GetPortalClientsFromDate(ctx, offset, limit, fromDate, toDate)
+		clients, err := c.oldDB.ClientStore().GetPortalClientsFromDate(ctx, offset, limit, fromDate, toDate, c.portalClientType)
 		if err != nil {
 			_ = tx.Rollback(ctx)
 
@@ -390,7 +390,7 @@ func (c *Converter) MigratePortalClientsToContactsSyncMode(ctx context.Context) 
 	err = PagerFunc(ctx, perPage, func(ctx context.Context, offset, limit int) (bool, error) {
 		iterate := true
 
-		clients, err := c.oldDB.ClientStore().GetPortalClientsFromDate(ctx, offset, limit, fromDate, toDate)
+		clients, err := c.oldDB.ClientStore().GetPortalClientsFromDate(ctx, offset, limit, fromDate, toDate, c.portalClientType)
 		if err != nil {
 			return false, err
 		}

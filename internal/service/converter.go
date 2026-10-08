@@ -89,6 +89,7 @@ type Converter struct {
 	isSyncMode           bool
 	migratePortalClients bool
 	portalChatIssuerID   string
+	portalClientType     string
 	stepRecordsMigrated  int64
 	sessionID            uuid.UUID
 }
@@ -134,7 +135,7 @@ type StepDuration struct {
 	RecordsMigrated int64
 }
 
-func NewConverter(oldDB *olddb.DB, modelnewDB *newdb.DB, encryptor *Encryptor, isSyncMode, migratePortalClients bool, portalChatIssuerID string, sessionID uuid.UUID) *Converter {
+func NewConverter(oldDB *olddb.DB, modelnewDB *newdb.DB, encryptor *Encryptor, isSyncMode, migratePortalClients bool, portalChatIssuerID, portalClientType string, sessionID uuid.UUID) *Converter {
 	return &Converter{
 		log:                  slog.Default(),
 		oldDB:                oldDB,
@@ -144,6 +145,7 @@ func NewConverter(oldDB *olddb.DB, modelnewDB *newdb.DB, encryptor *Encryptor, i
 		isSyncMode:           isSyncMode,
 		migratePortalClients: migratePortalClients,
 		portalChatIssuerID:   portalChatIssuerID,
+		portalClientType:     portalClientType,
 		sessionID:            sessionID,
 	}
 }
