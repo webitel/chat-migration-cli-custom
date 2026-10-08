@@ -47,6 +47,11 @@ func (c *Converter) MigrateConversations(ctx context.Context) error {
 		return err
 	}
 
+	clientTypes, err := c.getConversationClientTypes(ctx)
+	if err != nil {
+		return err
+	}
+
 	fromDate, toDate, err := c.GetMigrationWindow(ctx)
 	if err != nil {
 		return err
@@ -62,7 +67,7 @@ func (c *Converter) MigrateConversations(ctx context.Context) error {
 		return cause
 	}
 
-	lastInitiator, lastFlowID := 0, 0
+	lastInitiator := 0
 
 	for {
 		tx, err := c.newDB.Pool().Begin(ctx)
@@ -70,7 +75,7 @@ func (c *Converter) MigrateConversations(ctx context.Context) error {
 			return fail(err)
 		}
 
-		groupedConversations, err := c.oldDB.ConversationStore().GetGroupedConversationsByUsersAndFlowFromDate(ctx, lastInitiator, lastFlowID, perPage, fromDate, toDate, flowIDs)
+		groupedConversations, err := c.oldDB.ConversationStore().GetGroupedConversationsByInitiatorFromDate(ctx, lastInitiator, perPage, fromDate, toDate, flowIDs, clientTypes)
 		if err != nil {
 			_ = tx.Rollback(ctx)
 
@@ -83,7 +88,7 @@ func (c *Converter) MigrateConversations(ctx context.Context) error {
 			break
 		}
 
-		c.log.Debug("conversations page fetched", "lastInitiator", lastInitiator, "lastFlowID", lastFlowID, "count", len(groupedConversations))
+		c.log.Debug("conversations page fetched", "lastInitiator", lastInitiator, "count", len(groupedConversations))
 
 		var (
 			threads       []*modelnew.Thread
@@ -104,8 +109,8 @@ func (c *Converter) MigrateConversations(ctx context.Context) error {
 
 			migrationRows = append(migrationRows, &modelnew.MigrationRow{
 				ID:         uuid.Must(uuid.NewV7()),
-				EntityType: modelnew.EntityTypeFlowIDAndInitiatorIDToThread,
-				OldID:      buildFlowIDAndInitiatorIDToThreadOldID(conversation.FlowID, conversation.Initiator),
+				EntityType: modelnew.EntityTypeTypeAndInitiatorIDToThread,
+				OldID:      buildTypeAndInitiatorIDToThreadOldID(conversation.ClientType, conversation.Initiator),
 				NewID:      converted.ID,
 				DomainID:   conversation.DomainID,
 			})
@@ -125,21 +130,20 @@ func (c *Converter) MigrateConversations(ctx context.Context) error {
 		}
 
 		// advance cursor to the max group on this page (result row order is not guaranteed)
-		var maxInitiator, maxFlowID int
+		var maxInitiator int
 		for _, conv := range groupedConversations {
-			if conv.Initiator > maxInitiator || (conv.Initiator == maxInitiator && conv.FlowID > maxFlowID) {
+			if conv.Initiator > maxInitiator {
 				maxInitiator = conv.Initiator
-				maxFlowID = conv.FlowID
 			}
 		}
 
-		lastInitiator, lastFlowID = maxInitiator, maxFlowID
+		lastInitiator = maxInitiator
 
 		if err := tx.Commit(ctx); err != nil {
 			return fail(err)
 		}
 
-		c.log.Debug("conversations page committed", "lastInitiator", lastInitiator, "lastFlowID", lastFlowID, "conversations", len(groupedConversations))
+		c.log.Debug("conversations page committed", "lastInitiator", lastInitiator, "conversations", len(groupedConversations))
 		c.addRecordsMigrated(len(threads))
 
 		if len(groupedConversations) < perPage {
@@ -150,20 +154,21 @@ func (c *Converter) MigrateConversations(ctx context.Context) error {
 	return nil
 }
 
-func buildFlowIDAndInitiatorIDToThreadOldID(flowID, initiatorID int) string {
-	return strconv.Itoa(flowID) + "_" + strconv.Itoa(initiatorID)
+func buildTypeAndInitiatorIDToThreadOldID(clientType string, initiatorID int) string {
+	return clientType + "_" + strconv.Itoa(initiatorID)
 }
 
-func deconstructFlowIDAndInitiatorID(recordedID string) (flowID, initiatorID int) {
-	parts := strings.Split(recordedID, "_")
-	if len(parts) != 2 {
-		return 0, 0
+// deconstructTypeAndInitiatorID splits a "<type>_<initiator>" key on the last
+// "_" -- the client type may itself contain "_", the initiator id never does.
+func deconstructTypeAndInitiatorID(recordedID string) (clientType string, initiatorID int) {
+	i := strings.LastIndex(recordedID, "_")
+	if i < 0 {
+		return "", 0
 	}
 
-	flowID, _ = strconv.Atoi(parts[0])
-	initiatorID, _ = strconv.Atoi(parts[1])
+	initiatorID, _ = strconv.Atoi(recordedID[i+1:])
 
-	return flowID, initiatorID
+	return recordedID[:i], initiatorID
 }
 
 func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
@@ -199,6 +204,11 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 		return err
 	}
 
+	clientTypes, err := c.getConversationClientTypes(ctx)
+	if err != nil {
+		return err
+	}
+
 	if err := c.newDB.MigrationStore().MarkStepInProgress(ctx, c.sessionID, stepName); err != nil {
 		return err
 	}
@@ -219,7 +229,7 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 		return fail(err)
 	}
 
-	if err := c.newDB.MigrationStore().NullifyMigrationRowsExtraKey(ctx, nullifyTx, newThreadAfterSyncExtraKey, string(modelnew.EntityTypeFlowIDAndInitiatorIDToThread)); err != nil {
+	if err := c.newDB.MigrationStore().NullifyMigrationRowsExtraKey(ctx, nullifyTx, newThreadAfterSyncExtraKey, string(modelnew.EntityTypeTypeAndInitiatorIDToThread)); err != nil {
 		_ = nullifyTx.Rollback(ctx)
 
 		return fail(err)
@@ -234,7 +244,7 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 		return fail(err)
 	}
 
-	lastInitiator, lastFlowID := 0, 0
+	lastInitiator := 0
 
 	for {
 		tx, err := c.newDB.Pool().Begin(ctx)
@@ -242,7 +252,7 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 			return fail(err)
 		}
 
-		groupedConversations, err := c.oldDB.ConversationStore().GetGroupedConversationsByUsersAndFlowFromDate(ctx, lastInitiator, lastFlowID, perPage, fromDate, toDate, flowIDs)
+		groupedConversations, err := c.oldDB.ConversationStore().GetGroupedConversationsByInitiatorFromDate(ctx, lastInitiator, perPage, fromDate, toDate, flowIDs, clientTypes)
 		if err != nil {
 			_ = tx.Rollback(ctx)
 
@@ -256,16 +266,15 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 		}
 
 		originalCount := len(groupedConversations)
-		c.log.Debug("conversations page fetched", "lastInitiator", lastInitiator, "lastFlowID", lastFlowID, "count", originalCount)
+		c.log.Debug("conversations page fetched", "lastInitiator", lastInitiator, "count", originalCount)
 
 		// compute the max cursor from the originally fetched page, before the
 		// already-migrated dedup loop below mutates groupedConversations; result row
 		// order is not guaranteed, so take the max rather than the last element.
-		var maxInitiator, maxFlowID int
+		var maxInitiator int
 		for _, conv := range groupedConversations {
-			if conv.Initiator > maxInitiator || (conv.Initiator == maxInitiator && conv.FlowID > maxFlowID) {
+			if conv.Initiator > maxInitiator {
 				maxInitiator = conv.Initiator
-				maxFlowID = conv.FlowID
 			}
 		}
 
@@ -276,12 +285,12 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 			idsToCheck []string
 		)
 		for _, conv := range groupedConversations {
-			idsToCheck = append(idsToCheck, buildFlowIDAndInitiatorIDToThreadOldID(conv.FlowID, conv.Initiator))
+			idsToCheck = append(idsToCheck, buildTypeAndInitiatorIDToThreadOldID(conv.ClientType, conv.Initiator))
 		}
 
 		alreadyMigratedThreads, err := c.newDB.MigrationStore().GetMigrationRows(ctx, tx, &modelnew.MigrationRowFilters{
 			OldIDs: idsToCheck,
-			Type:   []modelnew.EntityType{modelnew.EntityTypeFlowIDAndInitiatorIDToThread},
+			Type:   []modelnew.EntityType{modelnew.EntityTypeTypeAndInitiatorIDToThread},
 		})
 		if err != nil {
 			_ = tx.Rollback(ctx)
@@ -295,9 +304,9 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 				found bool
 			)
 
-			flowID, initiatorID := deconstructFlowIDAndInitiatorID(thread.OldID)
+			clientType, initiatorID := deconstructTypeAndInitiatorID(thread.OldID)
 			for i, conv := range groupedConversations {
-				if flowID != conv.FlowID || initiatorID != conv.Initiator || thread.DomainID != conv.DomainID {
+				if clientType != conv.ClientType || initiatorID != conv.Initiator || thread.DomainID != conv.DomainID {
 					continue
 				}
 
@@ -337,8 +346,8 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 			syncExtraKey := newThreadAfterSyncExtraKey
 			migrationRows = append(migrationRows, &modelnew.MigrationRow{
 				ID:         uuid.Must(uuid.NewV7()),
-				EntityType: modelnew.EntityTypeFlowIDAndInitiatorIDToThread,
-				OldID:      buildFlowIDAndInitiatorIDToThreadOldID(conversation.FlowID, conversation.Initiator),
+				EntityType: modelnew.EntityTypeTypeAndInitiatorIDToThread,
+				OldID:      buildTypeAndInitiatorIDToThreadOldID(conversation.ClientType, conversation.Initiator),
 				NewID:      converted.ID,
 				DomainID:   conversation.DomainID,
 				ExtraKey:   &syncExtraKey,
@@ -359,13 +368,13 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 		}
 
 		// advance cursor to the max group on this page (computed above, before dedup)
-		lastInitiator, lastFlowID = maxInitiator, maxFlowID
+		lastInitiator = maxInitiator
 
 		if err := tx.Commit(ctx); err != nil {
 			return fail(err)
 		}
 
-		c.log.Debug("conversations page committed", "lastInitiator", lastInitiator, "lastFlowID", lastFlowID, "conversations", originalCount)
+		c.log.Debug("conversations page committed", "lastInitiator", lastInitiator, "conversations", originalCount)
 		c.addRecordsMigrated(len(threads))
 
 		if originalCount < perPage {

@@ -33,6 +33,7 @@ func (s *ThreadDialogStore) InsertThreadDialogs(ctx context.Context, tx pgx.Tx, 
 			"invited_by",
 			"leave_reason",
 			"deleted_at",
+			"via",
 		)
 		threadPermissionQuery = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Insert("im_thread.thread_permission").Columns(
 			"thread_id",
@@ -56,6 +57,7 @@ func (s *ThreadDialogStore) InsertThreadDialogs(ctx context.Context, tx pgx.Tx, 
 			threadDialog.InvitedBy,
 			threadDialog.LeaveReason,
 			threadDialog.DeletedAt,
+			threadDialog.Via,
 		)
 		threadPermissionQuery = threadPermissionQuery.Values(
 			threadDialog.ThreadID,

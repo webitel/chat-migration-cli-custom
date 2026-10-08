@@ -16,27 +16,31 @@ const (
 	membersReconSourceSQL = `
 SELECT
     (
-        SELECT COUNT(DISTINCT (initiator.user_id, conv.props ->> 'flow')) * 2
+        SELECT COUNT(DISTINCT initiator.user_id) * 2
         FROM chat.conversation conv
         INNER JOIN chat.channel initiator
             ON initiator.conversation_id = conv.id
            AND NOT initiator.internal
+        INNER JOIN chat.client cl ON cl.id = initiator.user_id
         WHERE conv.closed_at IS NOT NULL
           AND conv.props ->> 'flow' IS NOT NULL
           AND (conv.props ->> 'flow')::int = ANY (:flow_ids::int[])
+          AND COALESCE(cl.type, 'webchat') = ANY (:types::text[])
     ) AS "source.owner_dialogs_expected",
     (
-        SELECT COUNT(DISTINCT (initiator.user_id, conv.props ->> 'flow', ch.user_id))
+        SELECT COUNT(DISTINCT (initiator.user_id, ch.user_id))
         FROM chat.conversation conv
         INNER JOIN chat.channel initiator
             ON initiator.conversation_id = conv.id
            AND NOT initiator.internal
+        INNER JOIN chat.client cl ON cl.id = initiator.user_id
         INNER JOIN chat.channel ch
             ON ch.conversation_id = conv.id
            AND ch.internal
         WHERE conv.closed_at IS NOT NULL
           AND conv.props ->> 'flow' IS NOT NULL
           AND (conv.props ->> 'flow')::int = ANY (:flow_ids::int[])
+          AND COALESCE(cl.type, 'webchat') = ANY (:types::text[])
     ) AS "source.internal_dialogs_count"`
 
 	// thread_dialogs_count/thread_permissions_count/direct_settings_count
@@ -47,13 +51,38 @@ SELECT
 	// (buildOwnerThreadDialogFromConversation/buildInternalUsersThreadDialogs
 	// both build one DirectSettings per dialog, and DirectSettingsStore.
 	// InsertDirectSettings now inserts all of them, not just settings[0]).
+	//
+	// facebook_thread_dialogs_count/facebook_thread_dialogs_with_valid_via
+	// check that every thread_dialog belonging to a facebook contact
+	// (im_contact.contact.type = 'facebook', is_bot = false) has via filled
+	// with a value that exists in im_provider.gates. Deliberately not
+	// conditioned on public.bot_mapping.gate_id being set -- that's what lets
+	// this catch the configuration mistake of leaving gate_id empty for a bot
+	// that does have facebook clients (members.go's getBotByType would
+	// then never set via for it, and a bot_mapping-based check would not
+	// notice). Whole-database, not scoped by session or thread_role -- also
+	// reused as-is by sync mode (membersSyncReconTargetSQL) since the
+	// invariant holds regardless of which session created a given row.
 	membersReconTargetSQL = `
 SELECT
     (SELECT COUNT(*) FROM im_thread.thread_dialog WHERE thread_role = 4) AS "target.owner_dialogs_count",
     (SELECT COUNT(*) FROM im_thread.thread_dialog WHERE thread_role = 1) AS "target.internal_dialogs_count",
     (SELECT COUNT(*) FROM im_thread.thread_dialog) AS "target.thread_dialogs_count",
     (SELECT COUNT(*) FROM im_thread.thread_permission) AS "target.thread_permissions_count",
-    (SELECT COUNT(*) FROM im_thread.direct_settings) AS "target.direct_settings_count"`
+    (SELECT COUNT(*) FROM im_thread.direct_settings) AS "target.direct_settings_count",
+    (
+        SELECT COUNT(*)
+        FROM im_thread.thread_dialog td
+        JOIN im_contact.contact c ON c.id = td.member_id
+       WHERE c.type = 'facebook' AND c.is_bot = false
+    ) AS "target.facebook_thread_dialogs_count",
+    (
+        SELECT COUNT(*)
+        FROM im_thread.thread_dialog td
+        JOIN im_contact.contact c ON c.id = td.member_id
+        JOIN im_provider.gates g ON g.id::text = td.via
+       WHERE c.type = 'facebook' AND c.is_bot = false
+    ) AS "target.facebook_thread_dialogs_with_valid_via"`
 )
 
 var membersReconChecks = []ReconciliationCheck{
@@ -61,16 +90,22 @@ var membersReconChecks = []ReconciliationCheck{
 	{Left: "source.internal_dialogs_count", Right: "target.internal_dialogs_count", Op: "="},
 	{Left: "target.thread_dialogs_count", Right: "target.thread_permissions_count", Op: "="},
 	{Left: "target.thread_dialogs_count", Right: "target.direct_settings_count", Op: "="},
+	{Left: "target.facebook_thread_dialogs_count", Right: "target.facebook_thread_dialogs_with_valid_via", Op: "="},
 }
 
 // ReconcileMembers is the full-mode reconciliation for members.
 func (c *Converter) ReconcileMembers(ctx context.Context) (*ReconciliationResult, error) {
+	clientTypes, err := c.getConversationClientTypes(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	flowIDs, err := c.getConversationFlowIDs(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	params := map[string]any{"flow_ids": flowIDs}
+	params := map[string]any{"flow_ids": flowIDs, "types": clientTypes}
 
 	return runReconciliation(ctx, c.oldDB.Pool(), c.newDB.Pool(), membersReconSourceSQL, membersReconTargetSQL, params, membersReconChecks)
 }
@@ -86,20 +121,24 @@ func (c *Converter) ReconcileMembers(ctx context.Context) (*ReconciliationResult
 // must be counted only for rows this session itself created, using the
 // chat_migration rows the step writes per created thread_dialog -- otherwise
 // dialogs left over from a previous session on a reused thread would cause a
-// false mismatch.
+// false mismatch. The facebook via check is the one exception: it reuses the
+// same whole-database query as full mode (membersReconTargetSQL) -- see the
+// comment there.
 const (
 	membersSyncReconSourceSQL = `
-SELECT COUNT(DISTINCT (initiator.user_id, conv.props ->> 'flow', ch.user_id)) AS "source.internal_dialogs_count"
+SELECT COUNT(DISTINCT (initiator.user_id, ch.user_id)) AS "source.internal_dialogs_count"
 FROM chat.conversation conv
 INNER JOIN chat.channel initiator
     ON initiator.conversation_id = conv.id
    AND NOT initiator.internal
+INNER JOIN chat.client cl ON cl.id = initiator.user_id
 INNER JOIN chat.channel ch
     ON ch.conversation_id = conv.id
    AND ch.internal
 WHERE conv.closed_at IS NOT NULL
   AND conv.props ->> 'flow' IS NOT NULL
   AND (conv.props ->> 'flow')::int = ANY (:flow_ids::int[])
+  AND COALESCE(cl.type, 'webchat') = ANY (:types::text[])
   AND conv.closed_at >= :created_from
   AND conv.closed_at < :created_to`
 
@@ -155,7 +194,20 @@ SELECT
         INNER JOIN im_thread.direct_settings ds ON ds.thread_dialog_id = cm.new_id
         WHERE cm.entity_type IN ('initiator_channel_thread_dialog', 'bot_channel_thread_dialog', 'internal_channel_thread_dialog')
           AND cm.session_id = :session_id
-    ) AS "target.direct_settings_count"`
+    ) AS "target.direct_settings_count",
+    (
+        SELECT COUNT(*)
+        FROM im_thread.thread_dialog td
+        JOIN im_contact.contact c ON c.id = td.member_id
+       WHERE c.type = 'facebook' AND c.is_bot = false
+    ) AS "target.facebook_thread_dialogs_count",
+    (
+        SELECT COUNT(*)
+        FROM im_thread.thread_dialog td
+        JOIN im_contact.contact c ON c.id = td.member_id
+        JOIN im_provider.gates g ON g.id::text = td.via
+       WHERE c.type = 'facebook' AND c.is_bot = false
+    ) AS "target.facebook_thread_dialogs_with_valid_via"`
 )
 
 var membersSyncReconChecks = []ReconciliationCheck{
@@ -164,6 +216,7 @@ var membersSyncReconChecks = []ReconciliationCheck{
 	{Left: "target.migration_count", Right: "target.internal_dialogs_count", Op: "="},
 	{Left: "target.thread_dialogs_count", Right: "target.thread_permissions_count", Op: "="},
 	{Left: "target.thread_dialogs_count", Right: "target.direct_settings_count", Op: "="},
+	{Left: "target.facebook_thread_dialogs_count", Right: "target.facebook_thread_dialogs_with_valid_via", Op: "="},
 }
 
 // ReconcileMembersSyncMode is the sync-mode reconciliation for
@@ -178,12 +231,17 @@ func (c *Converter) ReconcileMembersSyncMode(ctx context.Context) (*Reconciliati
 		return nil, err
 	}
 
+	clientTypes, err := c.getConversationClientTypes(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	flowIDs, err := c.getConversationFlowIDs(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	params := map[string]any{"created_from": fromDate, "created_to": toDate, "session_id": c.sessionID, "flow_ids": flowIDs}
+	params := map[string]any{"created_from": fromDate, "created_to": toDate, "session_id": c.sessionID, "flow_ids": flowIDs, "types": clientTypes}
 
 	return runReconciliation(ctx, c.oldDB.Pool(), c.newDB.Pool(), membersSyncReconSourceSQL, membersSyncReconTargetSQL, params, membersSyncReconChecks)
 }

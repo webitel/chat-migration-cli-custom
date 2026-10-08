@@ -13,20 +13,22 @@ import "context"
 // conversationsSyncReconSourceSQL below.
 const (
 	conversationsReconSourceSQL = `
-SELECT COUNT(DISTINCT (initiator.user_id, conv.props ->> 'flow')) AS "source.source_count"
+SELECT COUNT(DISTINCT initiator.user_id) AS "source.source_count"
 FROM chat.conversation conv
 INNER JOIN chat.channel initiator
     ON initiator.conversation_id = conv.id
    AND NOT initiator.internal
+INNER JOIN chat.client cl ON cl.id = initiator.user_id
 WHERE conv.closed_at IS NOT NULL
   AND conv.props ->> 'flow' IS NOT NULL
   AND (conv.props ->> 'flow')::int = ANY (:flow_ids::int[])
+  AND COALESCE(cl.type, 'webchat') = ANY (:types::text[])
   AND conv.closed_at >= :created_from
   AND conv.closed_at < :created_to`
 
 	// migration_count counts distinct threads referenced by this session's
 	// conversation_thread rows -- one row per old conv_id, but one thread per
-	// (initiator, flow_id) group, including a sync-mode group that appends to
+	// initiator group, including a sync-mode group that appends to
 	// a thread created in an earlier session (its new conversation_thread
 	// rows still carry the current session_id). thread_count restricts that
 	// to new_id values that actually exist in im_thread.thread, to catch an
@@ -48,7 +50,7 @@ var conversationsReconChecks = []ReconciliationCheck{
 
 // conversationsSyncReconSourceSQL and conversationsSyncReconTargetSQL
 // implement the sync-mode reconciliation described in the "Sync" section of
-// conversations.recon.md. Unlike full mode, grouping by (initiator, flow_id)
+// conversations.recon.md. Unlike full mode, grouping by initiator
 // doesn't work here: a group whose thread already exists from an earlier
 // session doesn't guarantee every new chat.conversation row in that group
 // this run got its own conversation_thread mapping. So both sides count
@@ -65,8 +67,12 @@ WHERE conv.closed_at IS NOT NULL
   AND conv.closed_at >= :created_from
   AND conv.closed_at < :created_to
   AND EXISTS (
-    SELECT 1 FROM chat.channel initiator
-    WHERE initiator.conversation_id = conv.id AND NOT initiator.internal
+    SELECT 1
+    FROM chat.channel initiator
+    JOIN chat.client cl ON cl.id = initiator.user_id
+    WHERE initiator.conversation_id = conv.id
+      AND NOT initiator.internal
+      AND COALESCE(cl.type, 'webchat') = ANY (:types::text[])
   )`
 
 	conversationsSyncReconTargetSQL = `
@@ -91,12 +97,17 @@ func (c *Converter) ReconcileConversations(ctx context.Context) (*Reconciliation
 		return nil, err
 	}
 
+	clientTypes, err := c.getConversationClientTypes(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	flowIDs, err := c.getConversationFlowIDs(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	params := map[string]any{"created_from": fromDate, "created_to": toDate, "session_id": c.sessionID, "flow_ids": flowIDs}
+	params := map[string]any{"created_from": fromDate, "created_to": toDate, "session_id": c.sessionID, "flow_ids": flowIDs, "types": clientTypes}
 
 	return runReconciliation(ctx, c.oldDB.Pool(), c.newDB.Pool(), conversationsReconSourceSQL, conversationsReconTargetSQL, params, conversationsReconChecks)
 }
@@ -113,12 +124,17 @@ func (c *Converter) ReconcileConversationsSyncMode(ctx context.Context) (*Reconc
 		return nil, err
 	}
 
+	clientTypes, err := c.getConversationClientTypes(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	flowIDs, err := c.getConversationFlowIDs(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	params := map[string]any{"created_from": fromDate, "created_to": toDate, "session_id": c.sessionID, "flow_ids": flowIDs}
+	params := map[string]any{"created_from": fromDate, "created_to": toDate, "session_id": c.sessionID, "flow_ids": flowIDs, "types": clientTypes}
 
 	return runReconciliation(ctx, c.oldDB.Pool(), c.newDB.Pool(), conversationsSyncReconSourceSQL, conversationsSyncReconTargetSQL, params, conversationsSyncReconChecks)
 }

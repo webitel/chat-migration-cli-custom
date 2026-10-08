@@ -9,7 +9,7 @@ import (
 type GroupedConversation struct {
 	ConvIDs       []uuid.UUID         `db:"conv_ids"`
 	Initiator     int                 `db:"initiator"`
-	FlowID        int                 `db:"flow_id"`
+	ClientType    string              `db:"client_type"`
 	Title         string              `db:"title"`
 	DomainID      int                 `db:"domain_id"`
 	CreatedAt     time.Time           `db:"created_at"`

@@ -45,6 +45,16 @@ func (c *Converter) MigrateMembers(ctx context.Context) error {
 		return err
 	}
 
+	clientTypes, err := c.getConversationClientTypes(ctx)
+	if err != nil {
+		return err
+	}
+
+	botByType, err := c.getBotByType(ctx)
+	if err != nil {
+		return err
+	}
+
 	fromDate, toDate, err := c.GetMigrationWindow(ctx)
 	if err != nil {
 		return err
@@ -60,7 +70,7 @@ func (c *Converter) MigrateMembers(ctx context.Context) error {
 		return cause
 	}
 
-	lastInitiator, lastFlowID := 0, 0
+	lastInitiator := 0
 
 	for {
 		tx, err := c.newDB.Pool().Begin(ctx)
@@ -74,7 +84,7 @@ func (c *Converter) MigrateMembers(ctx context.Context) error {
 			threadSettings []*modelnew.DirectSettings
 		)
 
-		groupedConversations, err := c.oldDB.ConversationStore().GetGroupedConversationsByUsersAndFlowFromDate(ctx, lastInitiator, lastFlowID, perPage, fromDate, toDate, flowIDs)
+		groupedConversations, err := c.oldDB.ConversationStore().GetGroupedConversationsByInitiatorFromDate(ctx, lastInitiator, perPage, fromDate, toDate, flowIDs, clientTypes)
 		if err != nil {
 			_ = tx.Rollback(ctx)
 
@@ -87,13 +97,13 @@ func (c *Converter) MigrateMembers(ctx context.Context) error {
 			break
 		}
 
-		c.log.Debug("members page fetched", "lastInitiator", lastInitiator, "lastFlowID", lastFlowID, "count", len(groupedConversations))
+		c.log.Debug("members page fetched", "lastInitiator", lastInitiator, "count", len(groupedConversations))
 
 		for _, groupedConv := range groupedConversations {
 			if len(groupedConv.ConvIDs) == 0 {
 				c.log.Warn("grouped conversation has no conv IDs, skipping",
 					"initiator", groupedConv.Initiator,
-					"flow_id", groupedConv.FlowID,
+					"client_type", groupedConv.ClientType,
 				)
 
 				continue
@@ -106,7 +116,7 @@ func (c *Converter) MigrateMembers(ctx context.Context) error {
 				return fail(errors.Join(errors.New("failed to resolve migration row for conversation thread "+groupedConv.ConvIDs[0].String()), err))
 			}
 
-			dialogs, settings, rows, err := c.buildThreadDialogsFromConversation(ctx, tx, groupedConv, thread.NewID)
+			dialogs, settings, rows, err := c.buildThreadDialogsFromConversation(ctx, tx, groupedConv, thread.NewID, botByType)
 			if err != nil {
 				_ = tx.Rollback(ctx)
 
@@ -137,21 +147,20 @@ func (c *Converter) MigrateMembers(ctx context.Context) error {
 		}
 
 		// advance cursor to the max group on this page (result row order is not guaranteed)
-		var maxInitiator, maxFlowID int
+		var maxInitiator int
 		for _, conv := range groupedConversations {
-			if conv.Initiator > maxInitiator || (conv.Initiator == maxInitiator && conv.FlowID > maxFlowID) {
+			if conv.Initiator > maxInitiator {
 				maxInitiator = conv.Initiator
-				maxFlowID = conv.FlowID
 			}
 		}
 
-		lastInitiator, lastFlowID = maxInitiator, maxFlowID
+		lastInitiator = maxInitiator
 
 		if err := tx.Commit(ctx); err != nil {
 			return fail(err)
 		}
 
-		c.log.Debug("members page committed", "lastInitiator", lastInitiator, "lastFlowID", lastFlowID, "conversations", len(groupedConversations))
+		c.log.Debug("members page committed", "lastInitiator", lastInitiator, "conversations", len(groupedConversations))
 		c.addRecordsMigrated(len(threadDialogs))
 
 		if len(groupedConversations) < perPage {
@@ -197,6 +206,16 @@ func (c *Converter) MigrateMembersSyncMode(ctx context.Context) error {
 		return err
 	}
 
+	clientTypes, err := c.getConversationClientTypes(ctx)
+	if err != nil {
+		return err
+	}
+
+	botByType, err := c.getBotByType(ctx)
+	if err != nil {
+		return err
+	}
+
 	if err := c.newDB.MigrationStore().MarkStepInProgress(ctx, c.sessionID, SyncStepMembers); err != nil {
 		return err
 	}
@@ -207,7 +226,7 @@ func (c *Converter) MigrateMembersSyncMode(ctx context.Context) error {
 		return cause
 	}
 
-	lastInitiator, lastFlowID := 0, 0
+	lastInitiator := 0
 
 	for {
 		tx, err := c.newDB.Pool().Begin(ctx)
@@ -221,7 +240,7 @@ func (c *Converter) MigrateMembersSyncMode(ctx context.Context) error {
 			migrationRows  []*modelnew.MigrationRow
 		)
 
-		groupedConversations, err := c.oldDB.ConversationStore().GetGroupedConversationsByUsersAndFlowFromDate(ctx, lastInitiator, lastFlowID, perPage, fromDate, toDate, flowIDs)
+		groupedConversations, err := c.oldDB.ConversationStore().GetGroupedConversationsByInitiatorFromDate(ctx, lastInitiator, perPage, fromDate, toDate, flowIDs, clientTypes)
 		if err != nil {
 			_ = tx.Rollback(ctx)
 
@@ -234,14 +253,14 @@ func (c *Converter) MigrateMembersSyncMode(ctx context.Context) error {
 			break
 		}
 
-		c.log.Debug("members page fetched", "lastInitiator", lastInitiator, "lastFlowID", lastFlowID, "count", len(groupedConversations))
+		c.log.Debug("members page fetched", "lastInitiator", lastInitiator, "count", len(groupedConversations))
 
 		for _, groupedConv := range groupedConversations {
-			oldID := buildFlowIDAndInitiatorIDToThreadOldID(groupedConv.FlowID, groupedConv.Initiator)
+			oldID := buildTypeAndInitiatorIDToThreadOldID(groupedConv.ClientType, groupedConv.Initiator)
 
 			thread, err := c.newDB.MigrationStore().GetMigrationRow(ctx, tx, &modelnew.MigrationRowFilters{
 				OldIDs:   []string{oldID},
-				Type:     []modelnew.EntityType{modelnew.EntityTypeFlowIDAndInitiatorIDToThread},
+				Type:     []modelnew.EntityType{modelnew.EntityTypeTypeAndInitiatorIDToThread},
 				DomainID: groupedConv.DomainID,
 			})
 			if err != nil {
@@ -251,16 +270,16 @@ func (c *Converter) MigrateMembersSyncMode(ctx context.Context) error {
 			}
 
 			var (
-				dialogs                []*modelnew.ThreadDialog
-				settings               []*modelnew.DirectSettings
-				rows                   []*modelnew.MigrationRow
-				buildThreadDialogsFunc = c.buildInternalUsersThreadDialogs
+				dialogs  []*modelnew.ThreadDialog
+				settings []*modelnew.DirectSettings
+				rows     []*modelnew.MigrationRow
 			)
 			if thread.ExtraKey != nil && *thread.ExtraKey == newThreadAfterSyncExtraKey {
-				buildThreadDialogsFunc = c.buildThreadDialogsFromConversation
+				dialogs, settings, rows, err = c.buildThreadDialogsFromConversation(ctx, tx, groupedConv, thread.NewID, botByType)
+			} else {
+				dialogs, settings, rows, err = c.buildInternalUsersThreadDialogs(ctx, tx, groupedConv, thread.NewID)
 			}
 
-			dialogs, settings, rows, err = buildThreadDialogsFunc(ctx, tx, groupedConv, thread.NewID)
 			if err != nil {
 				_ = tx.Rollback(ctx)
 
@@ -291,21 +310,20 @@ func (c *Converter) MigrateMembersSyncMode(ctx context.Context) error {
 		}
 
 		// advance cursor to the max group on this page (result row order is not guaranteed)
-		var maxInitiator, maxFlowID int
+		var maxInitiator int
 		for _, conv := range groupedConversations {
-			if conv.Initiator > maxInitiator || (conv.Initiator == maxInitiator && conv.FlowID > maxFlowID) {
+			if conv.Initiator > maxInitiator {
 				maxInitiator = conv.Initiator
-				maxFlowID = conv.FlowID
 			}
 		}
 
-		lastInitiator, lastFlowID = maxInitiator, maxFlowID
+		lastInitiator = maxInitiator
 
 		if err := tx.Commit(ctx); err != nil {
 			return fail(err)
 		}
 
-		c.log.Debug("members page committed", "lastInitiator", lastInitiator, "lastFlowID", lastFlowID, "conversations", len(groupedConversations))
+		c.log.Debug("members page committed", "lastInitiator", lastInitiator, "conversations", len(groupedConversations))
 		c.addRecordsMigrated(len(threadDialogs))
 
 		if len(groupedConversations) < perPage {
@@ -316,8 +334,8 @@ func (c *Converter) MigrateMembersSyncMode(ctx context.Context) error {
 	return nil
 }
 
-func (c *Converter) buildThreadDialogsFromConversation(ctx context.Context, tx pgx.Tx, conversation *old.GroupedConversation, newThreadID uuid.UUID) ([]*modelnew.ThreadDialog, []*modelnew.DirectSettings, []*modelnew.MigrationRow, error) {
-	ownerDialogs, ownerSettings, ownerRows, err := c.buildOwnerThreadDialogFromConversation(ctx, tx, conversation, newThreadID)
+func (c *Converter) buildThreadDialogsFromConversation(ctx context.Context, tx pgx.Tx, conversation *old.GroupedConversation, newThreadID uuid.UUID, botByType map[string]*modelnew.BotTypeMapping) ([]*modelnew.ThreadDialog, []*modelnew.DirectSettings, []*modelnew.MigrationRow, error) {
+	ownerDialogs, ownerSettings, ownerRows, err := c.buildOwnerThreadDialogFromConversation(ctx, tx, conversation, newThreadID, botByType)
 	if err != nil {
 		return nil, nil, nil, errors.Join(errors.New("failed to build owner thread dialog from conversation"), err)
 	}
@@ -342,7 +360,16 @@ func (c *Converter) buildThreadDialogsFromConversation(ctx context.Context, tx p
 	return threadDialogs, threadSettings, migrationRows, nil
 }
 
-func (c *Converter) buildOwnerThreadDialogFromConversation(ctx context.Context, tx pgx.Tx, conversation *old.GroupedConversation, newThreadID uuid.UUID) ([]*modelnew.ThreadDialog, []*modelnew.DirectSettings, []*modelnew.MigrationRow, error) {
+func (c *Converter) buildOwnerThreadDialogFromConversation(ctx context.Context, tx pgx.Tx, conversation *old.GroupedConversation, newThreadID uuid.UUID, botByType map[string]*modelnew.BotTypeMapping) ([]*modelnew.ThreadDialog, []*modelnew.DirectSettings, []*modelnew.MigrationRow, error) {
+	// A client's thread spans conversations of several flows, so the owner bot
+	// is chosen by the client's type rather than by the conversation's flow.
+	bot, err := botForClientType(botByType, conversation.ClientType)
+	if err != nil {
+		c.log.Error("failed to pick bot by client type", slog.String("error", err.Error()), slog.String("client_type", conversation.ClientType))
+
+		return nil, nil, nil, err
+	}
+
 	initiatorContact, err := c.resolver.ResolveMigrationRow(ctx, tx, modelnew.EntityTypeClientContact, strconv.Itoa(conversation.Initiator), nil, conversation.DomainID)
 	if err != nil {
 		c.log.Error("failed to resolve initiator contact", slog.String("error", err.Error()), slog.Int("initiator", conversation.Initiator), slog.Int("domain_id", conversation.DomainID))
@@ -350,9 +377,9 @@ func (c *Converter) buildOwnerThreadDialogFromConversation(ctx context.Context, 
 		return nil, nil, nil, err
 	}
 
-	botContact, err := c.resolver.ResolveMigrationRow(ctx, tx, modelnew.EntityTypeBotContact, strconv.Itoa(conversation.FlowID), nil, conversation.DomainID)
+	botContact, err := c.resolver.ResolveMigrationRow(ctx, tx, modelnew.EntityTypeBotContact, strconv.Itoa(bot.OldBotID), nil, conversation.DomainID)
 	if err != nil {
-		c.log.Error("failed to resolve bot contact", slog.String("error", err.Error()), slog.Int("flow_id", conversation.FlowID), slog.Int("domain_id", conversation.DomainID))
+		c.log.Error("failed to resolve bot contact", slog.String("error", err.Error()), slog.Int("old_bot_id", bot.OldBotID), slog.String("client_type", conversation.ClientType), slog.Int("domain_id", conversation.DomainID))
 
 		return nil, nil, nil, err
 	}
@@ -367,6 +394,12 @@ func (c *Converter) buildOwnerThreadDialogFromConversation(ctx context.Context, 
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
+
+	if bot.GateID != nil {
+		via := bot.GateID.String()
+		initiatorDialog.Via = &via
+	}
+
 	botDialog := &modelnew.ThreadDialog{
 		ID:         uuid.Must(uuid.NewV7()),
 		ThreadID:   newThreadID,
@@ -409,7 +442,7 @@ func (c *Converter) buildOwnerThreadDialogFromConversation(ctx context.Context, 
 		{
 			ID:         uuid.Must(uuid.NewV7()),
 			EntityType: modelnew.EntityTypeBotChannelThreadDialog,
-			OldID:      strconv.Itoa(conversation.FlowID),
+			OldID:      strconv.Itoa(bot.OldBotID),
 			NewID:      botDialog.ID,
 			DomainID:   conversation.DomainID,
 			ExtraKey:   &newThreadIDStr,
