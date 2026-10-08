@@ -37,7 +37,7 @@ WHERE c.type = 'salmon'`
 
 	// portalReconSyncTargetSQL implements the "Sync" section of
 	// portal_client_to_contact.recon.md: target_count/setting_count can no
-	// longer be scoped by type = 'salmon' and compared against source_count,
+	// longer be scoped by the portal contact type and compared against source_count,
 	// since target db already carries organic post-cutover activity --
 	// instead they check, for every contact regardless of type, whether it
 	// has a matching contact_setting row (LEFT JOIN + FILTER, not a separate

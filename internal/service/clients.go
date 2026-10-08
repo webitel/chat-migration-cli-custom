@@ -303,7 +303,7 @@ func (c *Converter) MigratePortalClientsToContacts(ctx context.Context) error {
 		c.log.Debug("portal clients page fetched", "offset", offset, "count", len(clients))
 		contacts, pairs := dedupPortalContactsForInsert(clients, c.portalChatIssuerID)
 		// old_db can carry two chat.client rows for the same portal user (one
-		// per app, e.g. Salmon and Agent) sharing the same (domain_id,
+		// per app, e.g. the client app and Agent) sharing the same (domain_id,
 		// subject_id) -- InsertContactsIgnoreConflicts resolves each
 		// contact.ID in place to the row's real id (its own on a fresh
 		// insert, the pre-existing row's on conflict) -- migrationRows must
@@ -497,7 +497,7 @@ type contactDedupKey struct {
 // dedupPortalContactsForInsert converts a page of portal clients to contacts,
 // collapsing clients that share a (domain_id, issuer_id, subject_id) --
 // old_db can carry two chat.client rows for the same portal user (e.g. one
-// per app, Salmon and Agent) with the same (dc, name). InsertContactsIgnoreConflicts
+// per app, the client app and Agent) with the same (dc, name). InsertContactsIgnoreConflicts
 // upserts via "ON CONFLICT ... DO UPDATE", and Postgres rejects a single
 // INSERT statement that would have that DO UPDATE branch affect the same
 // target row twice ("ON CONFLICT DO UPDATE command cannot affect row a
