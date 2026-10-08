@@ -2,7 +2,6 @@ package olddb
 
 import (
 	"context"
-	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -18,39 +17,43 @@ func NewConversationStore(db *DB) *ConversationStore {
 	return &ConversationStore{db: db}
 }
 
-// GetGroupedConversationsByUsersAndFlowFromDate groups closed conversations
-// by (initiator, flow_id), keyset-paginated after (lastSeenInitiatorID,
-// lastSeenFlowID), restricted to the half-open window [from, to) on
+// GetGroupedConversationsByInitiatorFromDate groups closed conversations by
+// initiator (one group per client, regardless of flow), keyset-paginated after
+// lastSeenInitiatorID, restricted to the half-open window [from, to) on
 // closed_at: from <= closed_at < to. flowIDs restricts the result to
 // conversations whose props->>'flow' is in that list
-// (public.bot_mapping.old_bot_id).
-func (s *ConversationStore) GetGroupedConversationsByUsersAndFlowFromDate(ctx context.Context, lastSeenInitiatorID, lastSeenFlowID, limit int, from, to time.Time, flowIDs []int32) ([]*old.GroupedConversation, error) {
+// (public.bot_mapping.old_bot_id); clientTypes restricts it to initiators whose
+// chat.client.type (NULL treated as 'webchat', same as clients_to_contacts) is
+// in that list (public.bot_mapping.type).
+func (s *ConversationStore) GetGroupedConversationsByInitiatorFromDate(ctx context.Context, lastSeenInitiatorID, limit int, from, to time.Time, flowIDs []int32, clientTypes []string) ([]*old.GroupedConversation, error) {
 	query := `
 		WITH conversations AS (SELECT conv.id id,
                               initiator.user_id       initiator,
-                              (conv.props ->> 'flow') flow_id,
+                              COALESCE(cl.type, 'webchat') client_type,
                               conv.title,
                               conv.domain_id,
                               conv.created_at
                        FROM chat.conversation conv
                                 INNER JOIN chat.channel initiator
                                           ON initiator.conversation_id = conv.id AND NOT initiator.internal
+                                INNER JOIN chat.client cl ON cl.id = initiator.user_id
                        WHERE conv.closed_at IS NOT NULL
                         AND conv.props ->> 'flow' IS NOT NULL
-                        AND (conv.props ->> 'flow')::int = ANY($6::int[])
-                        AND (initiator.user_id, conv.props ->> 'flow') > ($1,$2::text)
-                        AND conv.closed_at >= $3
-                        AND conv.closed_at < $4),
+                        AND (conv.props ->> 'flow')::int = ANY($5::int[])
+                        AND COALESCE(cl.type, 'webchat') = ANY($6::text[])
+                        AND initiator.user_id > $1
+                        AND conv.closed_at >= $2
+                        AND conv.closed_at < $3),
      grouped_conversations AS (SELECT ARRAY_AGG(conv.id)                   conv_ids,
                                       initiator,
-                                      flow_id::bigint,
+                                      client_type,
                                       (MAX(DISTINCT conv.title)) "title",
                                       (ARRAY_AGG(conv.domain_id))[1]       domain_id,
                                       (ARRAY_AGG(conv.created_at))[1]      created_at
                                FROM conversations conv
-                               GROUP BY (conv.initiator, flow_id)
-                               ORDER BY conv.initiator, flow_id
-                               LIMIT $5
+                               GROUP BY (conv.initiator, conv.client_type)
+                               ORDER BY conv.initiator
+                               LIMIT $4
      )
 
 
@@ -71,7 +74,7 @@ LEFT JOIN LATERAL (SELECT JSONB_AGG(users.user) internal_users
                                   GROUP BY user_id) users) users ON true
 `
 
-	rows, err := s.db.Pool().Query(ctx, query, lastSeenInitiatorID, strconv.Itoa(lastSeenFlowID), from, to, limit, flowIDs)
+	rows, err := s.db.Pool().Query(ctx, query, lastSeenInitiatorID, from, to, limit, flowIDs, clientTypes)
 	if err != nil {
 		return nil, err
 	}

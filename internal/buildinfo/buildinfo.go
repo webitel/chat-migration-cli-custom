@@ -6,7 +6,7 @@ package buildinfo
 // special build flags.
 var (
 	// Version is the semantic version of the application (Major.Minor.Patch).
-	Version     = "1.0.3"
+	Version     = "1.0.6"
 	BuildNumber = "dev"
 	GitCommit   = "unknown"
 	BuildTime   = "unknown"

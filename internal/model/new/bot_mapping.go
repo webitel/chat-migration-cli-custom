@@ -18,3 +18,13 @@ type BotGateMapping struct {
 	OldBotID int       `db:"old_bot_id"`
 	GateID   uuid.UUID `db:"gate_id"`
 }
+
+// BotTypeMapping is the public.bot_mapping row chosen to represent a client
+// type: the row of that type with the smallest new_bot_id (ties broken by
+// old_bot_id). GateID is nil when the row has no manually configured gate.
+type BotTypeMapping struct {
+	Type     string     `db:"type"`
+	OldBotID int        `db:"old_bot_id"`
+	NewBotID uuid.UUID  `db:"new_bot_id"`
+	GateID   *uuid.UUID `db:"gate_id"`
+}

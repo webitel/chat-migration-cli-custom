@@ -8,7 +8,7 @@ const (
 	EntityTypeClientContact                EntityType = "client_contact"
 	EntityTypeBotContact                   EntityType = "bot_contact"
 	EntityTypeConversationThread           EntityType = "conversation_thread"
-	EntityTypeFlowIDAndInitiatorIDToThread EntityType = "flow_id_and_initiator_id_to_thread"
+	EntityTypeTypeAndInitiatorIDToThread   EntityType = "type_and_initiator_id_to_thread"
 	EntityTypeInitiatorChannelThreadDialog EntityType = "initiator_channel_thread_dialog"
 	EntityTypeBotChannelThreadDialog       EntityType = "bot_channel_thread_dialog"
 	EntityTypeInternalChannelThreadDialog  EntityType = "internal_channel_thread_dialog"

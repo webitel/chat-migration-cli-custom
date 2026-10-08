@@ -5,12 +5,6 @@ import "context"
 // portalReconSourceSQL and portalReconTargetSQL implement the full-mode
 // reconciliation described in the "Full" section of
 // .md/enhancements/migration_steps/portal_client_to_contact.recon.md.
-// Unlike clients_to_contacts, the flow_id filter here is read live from
-// public.bot_mapping (same lookup the step itself uses) rather than a
-// hardcoded snapshot -- see that doc for why. public.bot_mapping lives only
-// in new_db, though, and portalReconSourceSQL runs against old_db, so it
-// can't be a subquery inside this SQL text -- the caller resolves it via
-// BotMappingStore.GetOldBotIDsByType and passes the result in as :flow_ids.
 const (
 	portalReconSourceSQL = `
 SELECT COUNT(*) AS "source.source_count"
@@ -18,13 +12,7 @@ FROM chat.client c
 INNER JOIN portal.user_account acc ON acc.id = c.external_id::uuid
 WHERE c.type = 'portal'
   AND c.created_at >= :created_from
-  AND c.created_at < :created_to
-  AND EXISTS (
-    SELECT 1
-    FROM chat.channel ch
-    WHERE ch.user_id = c.id
-      AND (ch.props ->> 'flow')::int = ANY(:flow_ids::int[])
-  )`
+  AND c.created_at < :created_to`
 
 	portalReconTargetSQL = `
 SELECT
@@ -73,10 +61,18 @@ FROM im_contact.contact c
 LEFT JOIN im_contact.contact_setting cs ON cs.contact_id = c.id`
 )
 
+// portalReconChecks does not compare source_count against target_count/
+// setting_count: since the step now inserts via InsertContactsIgnoreConflicts
+// (old_db can carry two chat.client rows for the same portal user, e.g. one
+// per app, sharing the same (domain_id, subject_id)), several old rows can
+// resolve to the same contact, so target_count can legitimately be lower
+// than source_count. migration_count stays 1:1 with source_count regardless
+// (one chat_migration row per old row, even if new_id repeats); target_count
+// = setting_count is the same self-consistency invariant sync mode uses --
+// every real contact has a settings row.
 var portalReconChecks = []ReconciliationCheck{
 	{Left: "source.source_count", Right: "target.migration_count", Op: "="},
-	{Left: "source.source_count", Right: "target.target_count", Op: "="},
-	{Left: "source.source_count", Right: "target.setting_count", Op: "="},
+	{Left: "target.target_count", Right: "target.setting_count", Op: "="},
 }
 
 // portalReconSyncChecks implements the sync-mode reconciliation described in
@@ -102,12 +98,7 @@ func (c *Converter) ReconcilePortalClientsToContacts(ctx context.Context) (*Reco
 		return nil, err
 	}
 
-	flowIDs, err := c.newDB.BotMappingStore().GetOldBotIDsByType(ctx, portalFlowBotType)
-	if err != nil {
-		return nil, err
-	}
-
-	params := map[string]any{"created_from": fromDate, "created_to": toDate, "session_id": c.sessionID, "flow_ids": flowIDs}
+	params := map[string]any{"created_from": fromDate, "created_to": toDate, "session_id": c.sessionID}
 
 	return runReconciliation(ctx, c.oldDB.Pool(), c.newDB.Pool(), portalReconSourceSQL, portalReconTargetSQL, params, portalReconChecks)
 }
@@ -125,12 +116,7 @@ func (c *Converter) ReconcilePortalClientsToContactsSyncMode(ctx context.Context
 		return nil, err
 	}
 
-	flowIDs, err := c.newDB.BotMappingStore().GetOldBotIDsByType(ctx, portalFlowBotType)
-	if err != nil {
-		return nil, err
-	}
-
-	params := map[string]any{"created_from": fromDate, "created_to": toDate, "session_id": c.sessionID, "flow_ids": flowIDs}
+	params := map[string]any{"created_from": fromDate, "created_to": toDate, "session_id": c.sessionID}
 
 	return runReconciliation(ctx, c.oldDB.Pool(), c.newDB.Pool(), portalReconSourceSQL, portalReconSyncTargetSQL, params, portalReconSyncChecks)
 }

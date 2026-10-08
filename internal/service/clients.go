@@ -248,12 +248,6 @@ func (c *Converter) MigrateClientsToContactsSyncMode(ctx context.Context) error 
 	return nil
 }
 
-// portalFlowBotType is the public.bot_mapping.type value whose old_bot_id
-// rows identify the Salmon app's flow(s) -- used to tell Salmon app portal
-// clients apart from Agent app portal clients, which share chat.client.type
-// = 'portal' but must not be migrated by this step.
-const portalFlowBotType = "portal"
-
 func (c *Converter) MigratePortalClientsToContacts(ctx context.Context) error {
 	const perPage = 1000
 
@@ -270,11 +264,6 @@ func (c *Converter) MigratePortalClientsToContacts(ctx context.Context) error {
 
 	if _, ok := completedSteps[StepClientsToContacts]; !ok {
 		return fmt.Errorf("step %q requires step %q to be completed first", StepPortalClientsToContacts, StepClientsToContacts)
-	}
-
-	flowIDs, err := c.newDB.BotMappingStore().GetOldBotIDsByType(ctx, portalFlowBotType)
-	if err != nil {
-		return err
 	}
 
 	fromDate, toDate, err := c.GetMigrationWindow(ctx)
@@ -300,7 +289,7 @@ func (c *Converter) MigratePortalClientsToContacts(ctx context.Context) error {
 
 		iterate := true
 
-		clients, err := c.oldDB.ClientStore().GetPortalClientsFromDate(ctx, offset, limit, fromDate, toDate, flowIDs)
+		clients, err := c.oldDB.ClientStore().GetPortalClientsFromDate(ctx, offset, limit, fromDate, toDate)
 		if err != nil {
 			_ = tx.Rollback(ctx)
 
@@ -312,28 +301,31 @@ func (c *Converter) MigratePortalClientsToContacts(ctx context.Context) error {
 		}
 
 		c.log.Debug("portal clients page fetched", "offset", offset, "count", len(clients))
-
-		var (
-			contacts      []*modelnew.Contact
-			migrationRows []*modelnew.MigrationRow
-		)
-
-		for _, client := range clients {
-			contact := convertPortalClientToContact(client, c.portalChatIssuerID)
-			contacts = append(contacts, contact)
-			migrationRows = append(migrationRows, &modelnew.MigrationRow{
-				ID:         uuid.Must(uuid.NewV7()),
-				EntityType: modelnew.EntityTypeClientContact,
-				OldID:      strconv.Itoa(client.ID),
-				NewID:      contact.ID,
-				DomainID:   contact.DomainID,
-			})
-		}
-
-		if err := c.newDB.ContactStore().InsertContacts(ctx, tx, contacts); err != nil {
+		contacts, pairs := dedupPortalContactsForInsert(clients, c.portalChatIssuerID)
+		// old_db can carry two chat.client rows for the same portal user (one
+		// per app, e.g. Salmon and Agent) sharing the same (domain_id,
+		// subject_id) -- InsertContactsIgnoreConflicts resolves each
+		// contact.ID in place to the row's real id (its own on a fresh
+		// insert, the pre-existing row's on conflict) -- migrationRows must
+		// be built from that resolved ID, not the one generated before the
+		// insert, or a conflicted contact ends up with a chat_migration row
+		// pointing at a row that was never inserted.
+		rowsAffected, err := c.newDB.ContactStore().InsertContactsIgnoreConflicts(ctx, tx, contacts)
+		if err != nil {
 			_ = tx.Rollback(ctx)
 
 			return false, err
+		}
+
+		var migrationRows []*modelnew.MigrationRow
+		for _, p := range pairs {
+			migrationRows = append(migrationRows, &modelnew.MigrationRow{
+				ID:         uuid.Must(uuid.NewV7()),
+				EntityType: modelnew.EntityTypeClientContact,
+				OldID:      strconv.Itoa(p.client.ID),
+				NewID:      p.contact.ID,
+				DomainID:   p.contact.DomainID,
+			})
 		}
 
 		if err := c.newDB.MigrationStore().InsertMigrations(ctx, tx, c.sessionID, migrationRows); err != nil {
@@ -346,7 +338,7 @@ func (c *Converter) MigratePortalClientsToContacts(ctx context.Context) error {
 			return false, err
 		}
 
-		c.addRecordsMigrated(len(contacts))
+		c.addRecordsMigrated(int(rowsAffected))
 
 		return iterate, nil
 	})
@@ -375,11 +367,6 @@ func (c *Converter) MigratePortalClientsToContactsSyncMode(ctx context.Context) 
 		return fmt.Errorf("step %q requires step %q to be completed first", SyncStepPortalClientsToContacts, SyncStepClientsToContacts)
 	}
 
-	flowIDs, err := c.newDB.BotMappingStore().GetOldBotIDsByType(ctx, portalFlowBotType)
-	if err != nil {
-		return err
-	}
-
 	fromDate, toDate, err := c.GetMigrationWindow(ctx)
 	if err != nil {
 		return err
@@ -403,7 +390,7 @@ func (c *Converter) MigratePortalClientsToContactsSyncMode(ctx context.Context) 
 	err = PagerFunc(ctx, perPage, func(ctx context.Context, offset, limit int) (bool, error) {
 		iterate := true
 
-		clients, err := c.oldDB.ClientStore().GetPortalClientsFromDate(ctx, offset, limit, fromDate, toDate, flowIDs)
+		clients, err := c.oldDB.ClientStore().GetPortalClientsFromDate(ctx, offset, limit, fromDate, toDate)
 		if err != nil {
 			return false, err
 		}
@@ -413,22 +400,7 @@ func (c *Converter) MigratePortalClientsToContactsSyncMode(ctx context.Context) 
 		}
 
 		c.log.Debug("portal clients page fetched", "offset", offset, "count", len(clients))
-
-		var (
-			contacts []*modelnew.Contact
-			pairs    []struct {
-				client  *old.PortalClient
-				contact *modelnew.Contact
-			}
-		)
-		for _, client := range clients {
-			contact := convertPortalClientToContact(client, c.portalChatIssuerID)
-			contacts = append(contacts, contact)
-			pairs = append(pairs, struct {
-				client  *old.PortalClient
-				contact *modelnew.Contact
-			}{client: client, contact: contact})
-		}
+		contacts, pairs := dedupPortalContactsForInsert(clients, c.portalChatIssuerID)
 		// InsertContactsIgnoreConflicts resolves each contact.ID in place to
 		// the row's real id (its own on a fresh insert, the pre-existing
 		// row's on conflict) -- migrationRows must be built from that
@@ -514,6 +486,59 @@ func convertPortalClientToContact(client *old.PortalClient, issuerID string) *mo
 		Username:  buildUsername(client.Name, client.Type, client.ProfileID.String()),
 		IsBot:     false,
 	}
+}
+
+type contactDedupKey struct {
+	DomainID  int
+	IssuerID  string
+	SubjectID string
+}
+
+// dedupPortalContactsForInsert converts a page of portal clients to contacts,
+// collapsing clients that share a (domain_id, issuer_id, subject_id) --
+// old_db can carry two chat.client rows for the same portal user (e.g. one
+// per app, Salmon and Agent) with the same (dc, name). InsertContactsIgnoreConflicts
+// upserts via "ON CONFLICT ... DO UPDATE", and Postgres rejects a single
+// INSERT statement that would have that DO UPDATE branch affect the same
+// target row twice ("ON CONFLICT DO UPDATE command cannot affect row a
+// second time") -- so duplicates within one page must be collapsed before
+// the insert, not left for ON CONFLICT to resolve. contacts holds one
+// *modelnew.Contact per distinct key (first occurrence in clients) to pass
+// to InsertContactsIgnoreConflicts; pairs holds one entry per input client,
+// with duplicates sharing the same *modelnew.Contact pointer as the first
+// occurrence, so once the insert resolves that pointer's ID in place, every
+// pair referencing it sees the resolved ID too.
+func dedupPortalContactsForInsert(clients []*old.PortalClient, issuerID string) ([]*modelnew.Contact, []struct {
+	client  *old.PortalClient
+	contact *modelnew.Contact
+},
+) {
+	var (
+		contacts []*modelnew.Contact
+		pairs    = make([]struct {
+			client  *old.PortalClient
+			contact *modelnew.Contact
+		}, 0, len(clients))
+		seen = make(map[contactDedupKey]*modelnew.Contact, len(clients))
+	)
+	for _, client := range clients {
+		contact := convertPortalClientToContact(client, issuerID)
+
+		key := contactDedupKey{DomainID: contact.DomainID, IssuerID: contact.IssuerID, SubjectID: contact.SubjectID}
+		if canonical, ok := seen[key]; ok {
+			contact = canonical
+		} else {
+			seen[key] = contact
+			contacts = append(contacts, contact)
+		}
+
+		pairs = append(pairs, struct {
+			client  *old.PortalClient
+			contact *modelnew.Contact
+		}{client: client, contact: contact})
+	}
+
+	return contacts, pairs
 }
 
 func buildUsernameForClient(cli *old.Client) string {
