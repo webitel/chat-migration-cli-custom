@@ -72,10 +72,10 @@ ORDER BY c.id LIMIT $2`
 	return res, nil
 }
 
-// GetPortalClientsFromDate returns the next page of portal (Salmon app)
+// GetPortalClientsFromDate returns the next page of portal (client app)
 // clients, offset-paginated, restricted to the half-open window [from, to)
 // on created_at: from <= created_at < to. Includes 'portal'-type chat.client
-// rows belonging to the Agent app as well as the Salmon app -- there is no
+// rows belonging to the Agent app as well as the client app -- there is no
 // reliable way to tell them apart by created_at alone, and filtering by
 // chat.channel activity instead let clients whose first matching channel
 // appeared after their created_at's migration window fall through and never
