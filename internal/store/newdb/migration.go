@@ -260,45 +260,6 @@ func (s *MigrationStore) SaveStepProgressInTx(ctx context.Context, tx pgx.Tx, se
 	return err
 }
 
-// GetCursorProgress returns the last successfully committed keyset cursor for a step.
-// Returns (0, 0, nil) if the step has no recorded cursor progress (first run).
-func (s *MigrationStore) GetCursorProgress(ctx context.Context, step string) (initiator int, flowID int, err error) {
-	var cursor *string
-	err = s.store.Pool().QueryRow(ctx, `
-		SELECT page_cursor FROM public.chat_migration_step
-		WHERE step = $1 AND status != 'completed'
-	`, step).Scan(&cursor)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, 0, nil
-	}
-	if err != nil || cursor == nil {
-		return 0, 0, err
-	}
-	parts := strings.SplitN(*cursor, ":", 2)
-	if len(parts) != 2 {
-		return 0, 0, fmt.Errorf("invalid cursor %q", *cursor)
-	}
-	initiator, err = strconv.Atoi(parts[0])
-	if err != nil {
-		return 0, 0, fmt.Errorf("invalid cursor initiator: %w", err)
-	}
-	flowID, err = strconv.Atoi(parts[1])
-	if err != nil {
-		return 0, 0, fmt.Errorf("invalid cursor flowID: %w", err)
-	}
-	return initiator, flowID, nil
-}
-
-func (s *MigrationStore) SaveCursorProgressInTx(ctx context.Context, tx pgx.Tx, sessionID uuid.UUID, step string, initiator int, flowID int) error {
-	cursor := fmt.Sprintf("%d:%d", initiator, flowID)
-	_, err := tx.Exec(ctx, `
-		INSERT INTO public.chat_migration_step (id, step, status, page_cursor, session_id)
-		VALUES (gen_random_uuid(), $1, 'in_progress', $2, $3)
-		ON CONFLICT (step, session_id) DO UPDATE SET status = 'in_progress', page_cursor = EXCLUDED.page_cursor, error = NULL
-	`, step, cursor, sessionID)
-	return err
-}
-
 // GetIDCursorProgress returns the last successfully committed keyset cursor (a single
 // primary-key value) for a step. Returns (0, nil) if the step has no recorded cursor
 // progress (first run).
@@ -444,8 +405,16 @@ func (s *MigrationStore) GetLastFullSessionStartedAt(ctx context.Context) (*time
 // the given exceptSteps. exceptSteps is used by messages, the one step that
 // supports resuming a failed/in-progress run within the same session -- its
 // own incomplete row must not block its own resumed run.
+//
+// Called with no exceptSteps (the common case), the variadic arg is a nil
+// []string, which pgx binds as SQL NULL rather than an empty array. Postgres
+// evaluates `step = ANY(NULL)` as NULL, and `NOT NULL` is also NULL -- so
+// every row's WHERE clause was silently NULL (excluded), and the check never
+// found any incomplete step at all. COALESCE to an empty array before ANY()
+// so a NULL parameter behaves like "no exceptions" instead of "match
+// nothing".
 func (s *MigrationStore) CheckAllStepsCompleted(ctx context.Context, exceptSteps ...string) error {
-	rows, err := s.store.Pool().Query(ctx, `SELECT DISTINCT step FROM public.chat_migration_step WHERE status != 'completed' AND NOT (step = ANY($1))`, exceptSteps)
+	rows, err := s.store.Pool().Query(ctx, `SELECT DISTINCT step FROM public.chat_migration_step WHERE status != 'completed' AND NOT (step = ANY(COALESCE($1::text[], ARRAY[]::text[])))`, exceptSteps)
 	if err != nil {
 		return err
 	}

@@ -177,6 +177,13 @@ func (c *Converter) runSingleStep(ctx context.Context, stepName string) error {
 		return fmt.Errorf("unknown migration step: %s", stepName)
 	}
 
+	// Checked before any session is created (see runSteps) so a run blocked
+	// by a leftover incomplete step from a previous run never creates its
+	// own chat_migration_sessions row.
+	if err := c.newDB.MigrationStore().CheckAllStepsCompleted(ctx, messagesResumeException(step.Name)...); err != nil {
+		return err
+	}
+
 	if !c.isSyncMode {
 		completed, err := c.newDB.MigrationStore().GetCompletedSteps(ctx, c.sessionID)
 		if err != nil {
@@ -256,6 +263,13 @@ func (c *Converter) runStepsFrom(ctx context.Context, startFrom string) error {
 		return fmt.Errorf("unknown migration step: %s", startFrom)
 	}
 
+	// Checked before any session is created (see runSteps) so a run blocked
+	// by a leftover incomplete step from a previous run never creates its
+	// own chat_migration_sessions row.
+	if err := c.newDB.MigrationStore().CheckAllStepsCompleted(ctx, messagesResumeException(steps[firstStepIndex].Name)...); err != nil {
+		return err
+	}
+
 	durations := make([]StepDuration, 0, len(steps)-firstStepIndex)
 	for _, step := range steps[firstStepIndex:] {
 		if _, ok := completed[step.Name]; ok {
@@ -306,6 +320,16 @@ func (c *Converter) runSteps(ctx context.Context) error {
 		}
 	}
 
+	// Checked before any session is created -- ensureSession creates the
+	// chat_migration_sessions row for the first step it's called with, and
+	// that used to happen before this check ran (each step's own internal
+	// CheckAllStepsCompleted call), leaving a session row behind for a run
+	// that never did any work. No exceptSteps here: a fresh run from the
+	// first step is never resuming messages.
+	if err := c.newDB.MigrationStore().CheckAllStepsCompleted(ctx); err != nil {
+		return err
+	}
+
 	durations := make([]StepDuration, 0, len(steps))
 	for _, step := range steps {
 		if _, ok := completed[step.Name]; ok {
@@ -334,6 +358,19 @@ func (c *Converter) runSteps(ctx context.Context) error {
 		c.log.Info("migration step completed", "step", step.Name)
 	}
 	c.logStepDurations(durations)
+	return nil
+}
+
+// messagesResumeException returns stepName as a single-element exceptSteps
+// slice if it's the messages step (either mode), nil otherwise. messages is
+// the only step that supports resuming a failed/in-progress run within the
+// same step (see MigrateMessages/MigrateMessagesSyncMode, which except their
+// own name from their internal CheckAllStepsCompleted call) -- every other
+// step's own incomplete row must still block, since none of them resume.
+func messagesResumeException(stepName string) []string {
+	if stepName == StepMessages || stepName == SyncStepMessages {
+		return []string{stepName}
+	}
 	return nil
 }
 
@@ -458,7 +495,7 @@ func (c *Converter) GetMigrationWindow(ctx context.Context) (fromDate, toDate ti
 // values used to restrict which old conversations (chat.conversation's
 // props->>'flow') are eligible for migration -- read independently by
 // conversations, members and messages, since each re-derives the same
-// (initiator, flow_id) grouping and can run on its own via
+// initiator grouping and can run on its own via
 // MIGRATION_START_FROM_STEP. An empty bot_mapping is treated as a
 // misconfiguration rather than "nothing to migrate".
 func (c *Converter) getConversationFlowIDs(ctx context.Context) ([]int32, error) {
@@ -470,6 +507,36 @@ func (c *Converter) getConversationFlowIDs(ctx context.Context) ([]int32, error)
 		return nil, errors.New("public.bot_mapping has no rows -- populate it with flow_id mappings before migrating conversations")
 	}
 	return flowIDs, nil
+}
+
+// getConversationClientTypes returns the distinct public.bot_mapping.type
+// values used to restrict which old conversations are eligible for migration
+// by the type of the client who initiated them (same list clients_to_contacts
+// filters clients by) -- read independently by conversations, members and
+// messages, like getConversationFlowIDs.
+func (c *Converter) getConversationClientTypes(ctx context.Context) ([]string, error) {
+	return c.newDB.BotMappingStore().GetTypes(ctx)
+}
+
+// getBotByType returns, per client type, the public.bot_mapping row that
+// represents that type's bot (the smallest new_bot_id, ties broken by
+// old_bot_id) -- used by members to resolve the owner bot contact and the
+// initiator's via (gate_id) of a client's thread, and by messages to attribute
+// bot messages, since a thread now spans conversations of several flows. A
+// client type without a row is not an error here; callers fail when they
+// actually need it.
+func (c *Converter) getBotByType(ctx context.Context) (map[string]*modelnew.BotTypeMapping, error) {
+	return c.newDB.BotMappingStore().GetByType(ctx)
+}
+
+// botForClientType returns the bot_mapping row for a client type, or an error
+// if public.bot_mapping has no row of that type.
+func botForClientType(botByType map[string]*modelnew.BotTypeMapping, clientType string) (*modelnew.BotTypeMapping, error) {
+	bot, ok := botByType[clientType]
+	if !ok {
+		return nil, fmt.Errorf("public.bot_mapping has no row of type %q", clientType)
+	}
+	return bot, nil
 }
 
 func PagerFunc(ctx context.Context, perPage int, do func(ctx context.Context, offset, limit int) (bool, error)) error {

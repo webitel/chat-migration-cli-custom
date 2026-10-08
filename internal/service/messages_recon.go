@@ -25,8 +25,12 @@ WHERE conv.closed_at IS NOT NULL
   AND conv.props ->> 'flow' IS NOT NULL
   AND (conv.props ->> 'flow')::int8 = ANY(:flow_ids)
   AND EXISTS (
-      SELECT 1 FROM chat.channel initiator
-      WHERE initiator.conversation_id = conv.id AND NOT initiator.internal
+      SELECT 1
+      FROM chat.channel initiator
+      JOIN chat.client cl ON cl.id = initiator.user_id
+      WHERE initiator.conversation_id = conv.id
+        AND NOT initiator.internal
+        AND COALESCE(cl.type, 'webchat') = ANY(:types::text[])
   )
   AND m.text IS DISTINCT FROM 'start'`
 
@@ -53,11 +57,15 @@ var messagesReconChecks = []ReconciliationCheck{
 
 // ReconcileMessages is the full-mode reconciliation for messages.
 func (c *Converter) ReconcileMessages(ctx context.Context) (*ReconciliationResult, error) {
+	clientTypes, err := c.getConversationClientTypes(ctx)
+	if err != nil {
+		return nil, err
+	}
 	flowIDs, err := c.getConversationFlowIDs(ctx)
 	if err != nil {
 		return nil, err
 	}
-	params := map[string]any{"flow_ids": flowIDs}
+	params := map[string]any{"flow_ids": flowIDs, "types": clientTypes}
 	return runReconciliation(ctx, c.oldDB.Pool(), c.newDB.Pool(), messagesReconSourceSQL, messagesReconTargetSQL, params, messagesReconChecks)
 }
 
@@ -90,8 +98,12 @@ WHERE conv.closed_at IS NOT NULL
   AND conv.closed_at >= :created_from
   AND conv.closed_at < :created_to
   AND EXISTS (
-      SELECT 1 FROM chat.channel initiator
-      WHERE initiator.conversation_id = conv.id AND NOT initiator.internal
+      SELECT 1
+      FROM chat.channel initiator
+      JOIN chat.client cl ON cl.id = initiator.user_id
+      WHERE initiator.conversation_id = conv.id
+        AND NOT initiator.internal
+        AND COALESCE(cl.type, 'webchat') = ANY(:types::text[])
   )
   AND m."type" IN ('text', 'file')
   AND m.text IS DISTINCT FROM 'start'`
@@ -132,10 +144,14 @@ func (c *Converter) ReconcileMessagesSyncMode(ctx context.Context) (*Reconciliat
 	if err != nil {
 		return nil, err
 	}
+	clientTypes, err := c.getConversationClientTypes(ctx)
+	if err != nil {
+		return nil, err
+	}
 	flowIDs, err := c.getConversationFlowIDs(ctx)
 	if err != nil {
 		return nil, err
 	}
-	params := map[string]any{"created_from": fromDate, "created_to": toDate, "session_id": c.sessionID, "flow_ids": flowIDs}
+	params := map[string]any{"created_from": fromDate, "created_to": toDate, "session_id": c.sessionID, "flow_ids": flowIDs, "types": clientTypes}
 	return runReconciliation(ctx, c.oldDB.Pool(), c.newDB.Pool(), messagesSyncReconSourceSQL, messagesSyncReconTargetSQL, params, messagesSyncReconChecks)
 }

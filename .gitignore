@@ -1,6 +1,5 @@
 # Claude Code
 .claude/
-CLAUDE.md
 
 # graphify
 graphify-out/
@@ -13,6 +12,10 @@ docs/
 .zed/
 __debug_server
 __debug_bin*
+.idea
 
 # Build output
 chat-migration-cli
+
+# Migration run logs
+.md/scripts/logs/

@@ -3,7 +3,7 @@ package buildinfo
 
 // Version is the semantic version of the application (Major.Minor.Patch).
 // It is set manually by a developer.
-const Version = "1.0.3"
+const Version = "1.0.6"
 
 // The variables below are populated at build time via -ldflags -X
 // (see build.ps1). Their defaults keep plain `go run`/`go build` working

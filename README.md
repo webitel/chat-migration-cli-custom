@@ -18,7 +18,7 @@ Migration runs as an ordered sequence of steps. Each step is idempotent and resu
 | 1 | `clients_to_contacts` | Migrates external client users to contacts |
 | 1b | `portal_client_to_contact` | Migrates portal clients to contacts (only runs if `MIGRATION_MIGRATE_PORTAL_CLIENTS` is enabled) |
 | 2 | `bots_to_contacts` | Links flow bots to their already-existing contacts via `public.bot_mapping` (bots are created manually in the new database before migration; this step only writes the `flow_id -> contact_id` mapping) |
-| 3 | `conversations` | Groups legacy conversations by `(initiator, flow)` and creates chat threads |
+| 3 | `conversations` | Groups legacy conversations by client (one thread per client, regardless of flow) and creates chat threads |
 | 4 | `members` | Creates thread dialog members for all participants |
 | 5 | `messages` | Migrates all messages, file attachments and interactive content |
 | 6 | `facebook_and_whatsapp` | Migrates Facebook and WhatsApp provider configs to gates and Meta apps. Makes outbound HTTP calls to the Meta Graph API to resolve WhatsApp Business Account phone numbers |
@@ -35,7 +35,7 @@ Sync mode runs a parallel set of steps prefixed with `sync_mode_`. Each step que
 | 1 | `sync_mode_clients_to_contacts` | Inserts new clients created since last run; existing records are skipped |
 | 1b | `sync_mode_portal_client_to_contact` | Inserts new portal clients created since last run (only runs if `MIGRATION_MIGRATE_PORTAL_CLIENTS` is enabled) |
 | 2 | `sync_mode_bots_to_contacts` | No-op: bots are linked once, in full mode, from `public.bot_mapping` |
-| 3 | `sync_mode_conversations` | Creates threads for new conversations; adds new conversation IDs to existing threads for the same `(initiator, flow)` pair |
+| 3 | `sync_mode_conversations` | Creates threads for new conversations; adds new conversation IDs to the existing thread of the same client |
 | 4 | `sync_mode_members` | Adds full member set to newly created threads; adds only new internal users to existing threads |
 | 5 | `sync_mode_messages` | Migrates messages from conversations created since last run |
 | 6 | `sync_mode_facebook_and_whatsapp` | Migrates new Facebook and WhatsApp provider configs created since last run |
@@ -47,7 +47,7 @@ On the very first sync run (when no previous migration has completed), the times
 
 Steps use one of three pagination strategies:
 
-- **Two-value keyset pagination** (`conversations`, `members`, `messages`) ordered by `(initiator_id, flow_id)`. This avoids the O(N²) cost of OFFSET-based pagination on large datasets.
+- **Single-value keyset pagination** (`conversations`, `members`, `messages`) on the initiator (client) id: `WHERE initiator.user_id > $lastInitiator ORDER BY initiator.user_id LIMIT $limit`. This avoids the O(N²) cost of OFFSET-based pagination on large datasets.
 - **Single-value keyset pagination** (`clients_to_contacts`) — `WHERE c.id > $afterID ORDER BY c.id LIMIT $limit` on the legacy client's primary key, for the same reason as above.
 - **Offset pagination** (`facebook_and_whatsapp`) — plain `OFFSET`/`LIMIT` paging over a deterministically ordered query, so repeated runs resume against the same row order.
 
@@ -104,6 +104,8 @@ CREATE TABLE public.bot_mapping (
 - `new_bot_id` — must equal an existing new-database `im_contact.contact.id` row where `is_bot = true`.
 
 **Validation:** The tool does *not* check that `new_bot_id` corresponds to an existing contact. A misconfigured mapping will surface as a failure in a later migration step (e.g., a foreign-key violation or an unresolved reference), not at the `bots_to_contacts` step itself.
+
+**One thread per client:** `conversations` groups all of a client's conversations into a single thread, so `bot_mapping` must contain every flow that can create conversations in the old database (extra flows, e.g. chat plan flows, use `type = 'chatplan'` and `gate_id = NULL`). `members` and `messages` pick the thread's owner bot by the client's type: the `bot_mapping` row of that `type` with the smallest `new_bot_id` (ties: smallest `old_bot_id`); its `gate_id` is used for the initiator's `via`. A client type without a row fails those steps.
 
 **Known limitations:**
 - **`old_bot_id` is not domain-scoped.** The old database's `chat.bot` rows are keyed by `(flow_id, dc)`, so the same `flow_id` can in principle repeat across domains. The mapping table is keyed by bare `flow_id` only, so if your old DB has non-unique `flow_id` values across domains, bots in different domains that share a `flow_id` will all resolve to the same mapped contact. This is safe only if your deployment's `flow_id` values are globally unique.

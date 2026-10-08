@@ -40,30 +40,29 @@ func (s *BotMappingStore) GetTypes(ctx context.Context) ([]string, error) {
 	return types, nil
 }
 
-// GetOldBotIDsByType returns the public.bot_mapping.old_bot_id values for rows
-// matching botType, used by portal_client_to_contact to filter chat.channel
-// rows to those whose flow belongs to the portal (Salmon app) bot, as opposed
-// to the Agent app bot which also creates 'portal'-type chat.client rows.
-func (s *BotMappingStore) GetOldBotIDsByType(ctx context.Context, botType string) ([]int32, error) {
-	rows, err := s.db.pool.Query(ctx, `SELECT old_bot_id FROM public.bot_mapping WHERE type = $1`, botType)
+// GetByType returns, for every distinct public.bot_mapping.type, the row that
+// represents that client type: the one with the smallest new_bot_id (ties
+// broken by old_bot_id). Used by members and messages to pick the owner bot
+// (and its gate) of a thread by the type of the thread's client.
+func (s *BotMappingStore) GetByType(ctx context.Context) (map[string]*modelnew.BotTypeMapping, error) {
+	rows, err := s.db.pool.Query(ctx, `
+		SELECT DISTINCT ON (type) type, old_bot_id, new_bot_id, gate_id
+		FROM public.bot_mapping
+		ORDER BY type, new_bot_id, old_bot_id`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var ids []int32
-	for rows.Next() {
-		var id int32
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
+	list, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[modelnew.BotTypeMapping])
+	if err != nil {
 		return nil, err
 	}
-
-	return ids, nil
+	result := make(map[string]*modelnew.BotTypeMapping, len(list))
+	for _, m := range list {
+		result[m.Type] = m
+	}
+	return result, nil
 }
 
 // GetAllOldBotIDs returns every public.bot_mapping.old_bot_id value, regardless

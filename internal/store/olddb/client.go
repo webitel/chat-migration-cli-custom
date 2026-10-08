@@ -72,11 +72,13 @@ ORDER BY c.id LIMIT $2`
 
 // GetPortalClientsFromDate returns the next page of portal (Salmon app)
 // clients, offset-paginated, restricted to the half-open window [from, to)
-// on created_at: from <= created_at < to. flowIDs restricts the result to
-// clients whose chat.channel.props->>'flow' matches one of
-// public.bot_mapping.old_bot_id where type = 'portal' -- this excludes
-// 'portal'-type chat.client rows belonging to the Agent app.
-func (s *ClientStore) GetPortalClientsFromDate(ctx context.Context, offset int, limit int, from, to time.Time, flowIDs []int32) ([]*old.PortalClient, error) {
+// on created_at: from <= created_at < to. Includes 'portal'-type chat.client
+// rows belonging to the Agent app as well as the Salmon app -- there is no
+// reliable way to tell them apart by created_at alone, and filtering by
+// chat.channel activity instead let clients whose first matching channel
+// appeared after their created_at's migration window fall through and never
+// get migrated (see .md/enhancements/migration_steps/portal_client_to_contact.md).
+func (s *ClientStore) GetPortalClientsFromDate(ctx context.Context, offset int, limit int, from, to time.Time) ([]*old.PortalClient, error) {
 	var (
 		query = `SELECT c.id,
 					c.name AS name,
@@ -94,12 +96,6 @@ func (s *ClientStore) GetPortalClientsFromDate(ctx context.Context, offset int, 
 				WHERE c.type = 'portal'
 				  AND c.created_at >= $3::timestamp
 				  AND c.created_at < $4::timestamp
-				  AND EXISTS (
-					SELECT 1
-					FROM chat.channel ch
-					WHERE ch.user_id = c.id
-					  AND (ch.props ->> 'flow')::int = ANY($5::int[])
-				  )
 				ORDER BY c.id`
 	)
 	if offset < 0 {
@@ -109,7 +105,7 @@ func (s *ClientStore) GetPortalClientsFromDate(ctx context.Context, offset int, 
 		limit = 1
 	}
 	query += ` OFFSET $1 LIMIT $2`
-	rows, err := s.db.Pool().Query(ctx, query, offset, limit, from, to, flowIDs)
+	rows, err := s.db.Pool().Query(ctx, query, offset, limit, from, to)
 	if err != nil {
 		return nil, err
 	}
