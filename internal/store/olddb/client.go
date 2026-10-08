@@ -74,13 +74,14 @@ ORDER BY c.id LIMIT $2`
 
 // GetPortalClientsFromDate returns the next page of portal (client app)
 // clients, offset-paginated, restricted to the half-open window [from, to)
-// on created_at: from <= created_at < to. Includes 'portal'-type chat.client
+// on created_at: from <= created_at < to. Every client gets clientType as its
+// contact type. Includes 'portal'-type chat.client
 // rows belonging to the Agent app as well as the client app -- there is no
 // reliable way to tell them apart by created_at alone, and filtering by
 // chat.channel activity instead let clients whose first matching channel
 // appeared after their created_at's migration window fall through and never
 // get migrated (see .md/enhancements/migration_steps/portal_client_to_contact.md).
-func (s *ClientStore) GetPortalClientsFromDate(ctx context.Context, offset, limit int, from, to time.Time) ([]*old.PortalClient, error) {
+func (s *ClientStore) GetPortalClientsFromDate(ctx context.Context, offset, limit int, from, to time.Time, clientType string) ([]*old.PortalClient, error) {
 	query := `SELECT c.id,
 					c.name AS name,
 					null AS number,
@@ -89,7 +90,7 @@ func (s *ClientStore) GetPortalClientsFromDate(ctx context.Context, offset, limi
 					acc.profile_id AS profile_id,
 					null AS first_name,
 					null AS last_name,
-					'salmon' AS type,
+					$5::text AS type,
 					acc.dc AS dc,
 					c.name AS sub
 				FROM chat.client c
@@ -109,7 +110,7 @@ func (s *ClientStore) GetPortalClientsFromDate(ctx context.Context, offset, limi
 
 	query += ` OFFSET $1 LIMIT $2`
 
-	rows, err := s.db.Pool().Query(ctx, query, offset, limit, from, to)
+	rows, err := s.db.Pool().Query(ctx, query, offset, limit, from, to, clientType)
 	if err != nil {
 		return nil, err
 	}

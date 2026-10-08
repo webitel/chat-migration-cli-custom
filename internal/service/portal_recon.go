@@ -21,7 +21,7 @@ SELECT
         SELECT COUNT(*)
         FROM im_contact.contact_setting cs
         JOIN im_contact.contact c2 ON c2.id = cs.contact_id
-        WHERE c2.type = 'salmon'
+        WHERE c2.type = :portal_client_type
           AND NOT c2.is_bot
     ) AS "target.setting_count",
     (
@@ -30,10 +30,10 @@ SELECT
         JOIN im_contact.contact c3 ON c3.id = cm.new_id
         WHERE cm.entity_type = 'client_contact'
           AND cm.session_id = :session_id
-          AND c3.type = 'salmon'
+          AND c3.type = :portal_client_type
     ) AS "target.migration_count"
 FROM im_contact.contact c
-WHERE c.type = 'salmon'`
+WHERE c.type = :portal_client_type`
 
 	// portalReconSyncTargetSQL implements the "Sync" section of
 	// portal_client_to_contact.recon.md: target_count/setting_count can no
@@ -55,7 +55,7 @@ SELECT
         JOIN im_contact.contact c3 ON c3.id = cm.new_id
         WHERE cm.entity_type = 'client_contact'
           AND cm.session_id = :session_id
-          AND c3.type = 'salmon'
+          AND c3.type = :portal_client_type
     ) AS "target.migration_count"
 FROM im_contact.contact c
 LEFT JOIN im_contact.contact_setting cs ON cs.contact_id = c.id`
@@ -98,7 +98,12 @@ func (c *Converter) ReconcilePortalClientsToContacts(ctx context.Context) (*Reco
 		return nil, err
 	}
 
-	params := map[string]any{"created_from": fromDate, "created_to": toDate, "session_id": c.sessionID}
+	params := map[string]any{
+		"created_from":       fromDate,
+		"created_to":         toDate,
+		"session_id":         c.sessionID,
+		"portal_client_type": c.portalClientType,
+	}
 
 	return runReconciliation(ctx, c.oldDB.Pool(), c.newDB.Pool(), portalReconSourceSQL, portalReconTargetSQL, params, portalReconChecks)
 }
@@ -116,7 +121,12 @@ func (c *Converter) ReconcilePortalClientsToContactsSyncMode(ctx context.Context
 		return nil, err
 	}
 
-	params := map[string]any{"created_from": fromDate, "created_to": toDate, "session_id": c.sessionID}
+	params := map[string]any{
+		"created_from":       fromDate,
+		"created_to":         toDate,
+		"session_id":         c.sessionID,
+		"portal_client_type": c.portalClientType,
+	}
 
 	return runReconciliation(ctx, c.oldDB.Pool(), c.newDB.Pool(), portalReconSourceSQL, portalReconSyncTargetSQL, params, portalReconSyncChecks)
 }
