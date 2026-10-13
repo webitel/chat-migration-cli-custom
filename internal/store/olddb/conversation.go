@@ -22,14 +22,14 @@ func NewConversationStore(db *DB) *ConversationStore {
 // closed_at: from <= closed_at < to. flowIDs restricts the result to
 // conversations whose props->>'flow' is in that list
 // (public.bot_mapping.old_bot_id); clientTypes restricts it to initiators whose
-// chat.client.type (NULL treated as 'webchat', same as clients_to_contacts) is
+// chat.client.type (clients with NULL type are not migrated) is
 // in that list (public.bot_mapping.type).
 func (s *ConversationStore) GetGroupedConversationsByInitiatorFromDate(ctx context.Context, lastSeenInitiatorID int, limit int, from, to time.Time, flowIDs []int32, clientTypes []string) ([]*old.GroupedConversation, error) {
 	var (
 		query = `
 		WITH conversations AS (SELECT conv.id id,
                               initiator.user_id       initiator,
-                              COALESCE(cl.type, 'webchat') client_type,
+                              cl.type client_type,
                               conv.title,
                               conv.domain_id,
                               conv.created_at
@@ -40,7 +40,7 @@ func (s *ConversationStore) GetGroupedConversationsByInitiatorFromDate(ctx conte
                        WHERE conv.closed_at IS NOT NULL
                         AND conv.props ->> 'flow' IS NOT NULL
                         AND (conv.props ->> 'flow')::int = ANY($5::int[])
-                        AND COALESCE(cl.type, 'webchat') = ANY($6::text[])
+                        AND cl.type = ANY($6::text[])
                         AND initiator.user_id > $1
                         AND conv.closed_at >= $2
                         AND conv.closed_at < $3),
