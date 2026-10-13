@@ -30,7 +30,7 @@ WHERE conv.closed_at IS NOT NULL
       JOIN chat.client cl ON cl.id = initiator.user_id
       WHERE initiator.conversation_id = conv.id
         AND NOT initiator.internal
-        AND COALESCE(cl.type, 'webchat') = ANY(:types::text[])
+        AND cl.type = ANY(:types::text[])
   )
   AND m.text IS DISTINCT FROM 'start'`
 
@@ -106,7 +106,7 @@ WHERE conv.closed_at IS NOT NULL
       JOIN chat.client cl ON cl.id = initiator.user_id
       WHERE initiator.conversation_id = conv.id
         AND NOT initiator.internal
-        AND COALESCE(cl.type, 'webchat') = ANY(:types::text[])
+        AND cl.type = ANY(:types::text[])
   )
   AND m."type" IN ('text', 'file')
   AND m.text IS DISTINCT FROM 'start'`

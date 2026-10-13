@@ -25,7 +25,7 @@ SELECT
         WHERE conv.closed_at IS NOT NULL
           AND conv.props ->> 'flow' IS NOT NULL
           AND (conv.props ->> 'flow')::int = ANY (:flow_ids::int[])
-          AND COALESCE(cl.type, 'webchat') = ANY (:types::text[])
+          AND cl.type = ANY (:types::text[])
     ) AS "source.owner_dialogs_expected",
     (
         SELECT COUNT(DISTINCT (initiator.user_id, ch.user_id))
@@ -40,7 +40,7 @@ SELECT
         WHERE conv.closed_at IS NOT NULL
           AND conv.props ->> 'flow' IS NOT NULL
           AND (conv.props ->> 'flow')::int = ANY (:flow_ids::int[])
-          AND COALESCE(cl.type, 'webchat') = ANY (:types::text[])
+          AND cl.type = ANY (:types::text[])
     ) AS "source.internal_dialogs_count"`
 
 	// thread_dialogs_count/thread_permissions_count/direct_settings_count
@@ -138,7 +138,7 @@ INNER JOIN chat.channel ch
 WHERE conv.closed_at IS NOT NULL
   AND conv.props ->> 'flow' IS NOT NULL
   AND (conv.props ->> 'flow')::int = ANY (:flow_ids::int[])
-  AND COALESCE(cl.type, 'webchat') = ANY (:types::text[])
+  AND cl.type = ANY (:types::text[])
   AND conv.closed_at >= :created_from
   AND conv.closed_at < :created_to`
 
