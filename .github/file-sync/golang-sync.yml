@@ -4,7 +4,7 @@ version: 1
 source:
   repository: webitel/reusable-configs
   config: golang/sync.yml
-  sha: ef4e42032ca6d3cd02a819e6978ed645e2e227b3
+  sha: b078727d7623af8698b113ed5320c30bd5996f79
 files:
   .editorconfig:
     source: golang/configs/.editorconfig
@@ -50,4 +50,4 @@ files:
     sha256: fe63dddaaa6ab1654f3f9212050e5777483051123cd60caae0765cbefd40c1f4
   .vscode/settings.json:
     source: golang/.vscode/settings.json
-    sha256: 2209d8ad37806d64d691f5b3363c3009f07a3050f52bebd31090896f3d23c8ff
+    sha256: 35c323eede9889ebf4edcc9dac3af8649f818f376128258c0a88b9b2c90f5c39
