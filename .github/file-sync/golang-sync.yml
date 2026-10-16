@@ -4,7 +4,7 @@ version: 1
 source:
   repository: webitel/reusable-configs
   config: golang/sync.yml
-  sha: 31637e56b4e04217b50b74362c7ed9ff266119b6
+  sha: f8efdd23859604dc32d765efc993c7118955627e
 files:
   .editorconfig:
     source: golang/configs/.editorconfig
@@ -15,15 +15,18 @@ files:
   .github/workflows/cleanup-artifacts.yml:
     source: common/workflows/cleanup-artifacts.yml.njk
     sha256: c23ab5c2fec1713ce637e0c697b94aee74e41c408411dd3413ff8297b8c58d2b
+  .github/workflows/codeql-scheduled.yml:
+    source: common/workflows/codeql-scheduled.yml.njk
+    sha256: de6d6019bdbb33a6f42de3be76d5c0bfd95565434b9ff49a939250461538e098
   .github/workflows/dependabot-auto-merge.yml:
     source: common/workflows/dependabot-auto-merge.yml
     sha256: 3f9a2526900d4505d509e45ee406c6cccfaaca7e1661f7919863019e74fdcdc2
-  .github/workflows/pull-request-deliver.yml:
-    source: common/workflows/pull-request-deliver.yml.njk
-    sha256: c3110010e5dbf0a1e9736aa1adb6422a493993e4b24ae2bad9bacde2db28cccf
   .github/workflows/pull-request.yml:
     source: golang/workflows/pull-request.yml.njk
     sha256: fa4f6203a90eb69b48b14428e644281564bd3fc5b7c656379ceeefb3bbf5890c
+  .github/workflows/vulncheck.yml:
+    source: golang/workflows/vulncheck.yml.njk
+    sha256: 64081c279d210d3901039784068057c46a7b90e4f33e7fcffff941bfaa284ef2
   .github/workflows/workflow.yml:
     source: golang/workflows/workflow.yml.njk
     sha256: bfe6cff021ffe2a5d92b98a1f466c04bb74f966efc098b241175639a8a170e6f
