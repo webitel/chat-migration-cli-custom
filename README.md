@@ -19,7 +19,7 @@ Migration runs as an ordered sequence of steps. Each step is idempotent and resu
 | 1b | `portal_client_to_contact` | Migrates portal clients to contacts (only runs if `MIGRATION_MIGRATE_PORTAL_CLIENTS` is enabled) |
 | 2 | `bots_to_contacts` | Links flow bots to their already-existing contacts via `public.bot_mapping` (bots are created manually in the new database before migration; this step only writes the `flow_id -> contact_id` mapping) |
 | 3 | `conversations` | Groups legacy conversations by client (one thread per client, regardless of flow) and creates chat threads |
-| 4 | `members` | Creates thread dialog members for all participants |
+| 4 | `members` | Creates thread dialog members for all participants and puts the owner bot under bot control (`is_bot`, `bot_control_stack` position 0, `thread.owner_bot_id`/`bot_controller_id`) |
 | 5 | `messages` | Migrates all messages, file attachments and interactive content |
 | 6 | `facebook_and_whatsapp` | Migrates Facebook and WhatsApp provider configs to gates and Meta apps. Makes outbound HTTP calls to the Meta Graph API to resolve WhatsApp Business Account phone numbers |
 | 7 | `sync_contact_vias` | Syncs contact communication channels (vias) after all contacts and providers are in place |

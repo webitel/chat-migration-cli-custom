@@ -30,4 +30,5 @@ type ThreadDialog struct {
 	InvitedBy   *uuid.UUID `json:"invited_by" db:"invited_by"`
 	LeaveReason *string    `json:"leave_reason" db:"leave_reason"`
 	Via         *string    `json:"via" db:"via"`
+	IsBot       bool       `json:"is_bot" db:"is_bot"`
 }
