@@ -134,6 +134,12 @@ func (c *Converter) MigrateMembers(ctx context.Context) error {
 			return fail(errors.Join(errors.New("failed to insert thread dialogs"), err))
 		}
 
+		if err := c.newDB.ThreadStore().InitBotControl(ctx, tx, threadDialogs); err != nil {
+			_ = tx.Rollback(ctx)
+
+			return fail(errors.Join(errors.New("failed to init bot control"), err))
+		}
+
 		if err := c.newDB.DirectSettingsStore().InsertDirectSettings(ctx, tx, threadSettings); err != nil {
 			_ = tx.Rollback(ctx)
 
@@ -297,6 +303,12 @@ func (c *Converter) MigrateMembersSyncMode(ctx context.Context) error {
 			return fail(errors.Join(errors.New("failed to insert thread dialogs"), err))
 		}
 
+		if err := c.newDB.ThreadStore().InitBotControl(ctx, tx, threadDialogs); err != nil {
+			_ = tx.Rollback(ctx)
+
+			return fail(errors.Join(errors.New("failed to init bot control"), err))
+		}
+
 		if err := c.newDB.DirectSettingsStore().InsertDirectSettings(ctx, tx, threadSettings); err != nil {
 			_ = tx.Rollback(ctx)
 
@@ -405,6 +417,7 @@ func (c *Converter) buildOwnerThreadDialogFromConversation(ctx context.Context, 
 		ThreadID:   newThreadID,
 		MemberID:   botContact.NewID,
 		ThreadRole: modelnew.RoleOwner,
+		IsBot:      true,
 		DomainID:   conversation.DomainID,
 		CreatedAt:  now,
 		UpdatedAt:  now,
