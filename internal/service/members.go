@@ -384,6 +384,11 @@ func (c *Converter) buildOwnerThreadDialogFromConversation(ctx context.Context, 
 		return nil, nil, nil, err
 	}
 
+	liveDialogs, err := c.newDB.ThreadDialogStore().FindLiveDialogs(ctx, tx, newThreadID, initiatorContact.NewID, botContact.NewID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
 	now := time.Now()
 	initiatorDialog := &modelnew.ThreadDialog{
 		ID:         uuid.Must(uuid.NewV7()),
@@ -409,26 +414,30 @@ func (c *Converter) buildOwnerThreadDialogFromConversation(ctx context.Context, 
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
-	threadSettings := []*modelnew.DirectSettings{
-		{
+
+	var (
+		threadDialogs  = make([]*modelnew.ThreadDialog, 0, 2)
+		threadSettings = make([]*modelnew.DirectSettings, 0, 2)
+	)
+
+	for _, dialog := range []*modelnew.ThreadDialog{initiatorDialog, botDialog} {
+		if liveID, ok := liveDialogs[dialog.MemberID]; ok {
+			dialog.ID = liveID
+
+			continue
+		}
+
+		threadDialogs = append(threadDialogs, dialog)
+		threadSettings = append(threadSettings, &modelnew.DirectSettings{
 			ID:             uuid.Must(uuid.NewV7()),
-			ThreadDialogID: initiatorDialog.ID,
+			ThreadDialogID: dialog.ID,
 			DomainID:       conversation.DomainID,
 			Title:          conversation.Title,
 			CreatedAt:      now,
 			UpdatedAt:      now,
-		},
-		{
-			ID:             uuid.Must(uuid.NewV7()),
-			ThreadDialogID: botDialog.ID,
-			DomainID:       conversation.DomainID,
-			Title:          conversation.Title,
-			CreatedAt:      now,
-			UpdatedAt:      now,
-		},
+		})
 	}
 
-	threadDialogs := []*modelnew.ThreadDialog{initiatorDialog, botDialog}
 	newThreadIDStr := newThreadID.String()
 	migrationRows := []*modelnew.MigrationRow{
 		{

@@ -18,8 +18,8 @@ Migration runs as an ordered sequence of steps. Each step is idempotent and resu
 | 1 | `clients_to_contacts` | Migrates external client users to contacts |
 | 1b | `portal_client_to_contact` | Migrates portal clients to contacts (only runs if `MIGRATION_MIGRATE_PORTAL_CLIENTS` is enabled) |
 | 2 | `bots_to_contacts` | Links flow bots to their already-existing contacts via `public.bot_mapping` (bots are created manually in the new database before migration; this step only writes the `flow_id -> contact_id` mapping) |
-| 3 | `conversations` | Groups legacy conversations by client (one thread per client, regardless of flow) and creates chat threads |
-| 4 | `members` | Creates thread dialog members for all participants |
+| 3 | `conversations` | Groups legacy conversations by client (one thread per client, regardless of flow) and creates chat threads. A client that already has a live direct thread with the owner bot of its client type (e.g. created by im-thread-service after writing in the new app) keeps that thread: its conversations are attached to it instead of a new one |
+| 4 | `members` | Creates thread dialog members for all participants. Client and bot members that already exist in the thread are reused, not duplicated |
 | 5 | `messages` | Migrates all messages, file attachments and interactive content |
 | 6 | `facebook_and_whatsapp` | Migrates Facebook and WhatsApp provider configs to gates and Meta apps. Makes outbound HTTP calls to the Meta Graph API to resolve WhatsApp Business Account phone numbers |
 | 7 | `sync_contact_vias` | Syncs contact communication channels (vias) after all contacts and providers are in place |
@@ -35,7 +35,7 @@ Sync mode runs a parallel set of steps prefixed with `sync_mode_`. Each step que
 | 1 | `sync_mode_clients_to_contacts` | Inserts new clients created since last run; existing records are skipped |
 | 1b | `sync_mode_portal_client_to_contact` | Inserts new portal clients created since last run (only runs if `MIGRATION_MIGRATE_PORTAL_CLIENTS` is enabled) |
 | 2 | `sync_mode_bots_to_contacts` | No-op: bots are linked once, in full mode, from `public.bot_mapping` |
-| 3 | `sync_mode_conversations` | Creates threads for new conversations; adds new conversation IDs to the existing thread of the same client |
+| 3 | `sync_mode_conversations` | Creates threads for new conversations; adds new conversation IDs to the existing thread of the same client. A client with a live direct thread with the owner bot keeps that thread |
 | 4 | `sync_mode_members` | Adds full member set to newly created threads; adds only new internal users to existing threads |
 | 5 | `sync_mode_messages` | Migrates messages from conversations created since last run |
 | 6 | `sync_mode_facebook_and_whatsapp` | Migrates new Facebook and WhatsApp provider configs created since last run |

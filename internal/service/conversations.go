@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gofrs/uuid/v5" //nolint:depguard // NewV7AtTime is not available in google/uuid
+	"github.com/jackc/pgx/v5"
 
 	modelnew "github.com/webitel/chat-migration-cli-custom/internal/model/new"
 	"github.com/webitel/chat-migration-cli-custom/internal/model/old"
@@ -48,6 +49,11 @@ func (c *Converter) MigrateConversations(ctx context.Context) error {
 	}
 
 	clientTypes, err := c.getConversationClientTypes(ctx)
+	if err != nil {
+		return err
+	}
+
+	botByType, err := c.getBotByType(ctx)
 	if err != nil {
 		return err
 	}
@@ -95,14 +101,27 @@ func (c *Converter) MigrateConversations(ctx context.Context) error {
 			migrationRows []*modelnew.MigrationRow
 		)
 
+		liveThreads, err := c.findLiveDirectThreads(ctx, tx, groupedConversations, botByType)
+		if err != nil {
+			_ = tx.Rollback(ctx)
+
+			return fail(err)
+		}
+
 		for _, conversation := range groupedConversations {
-			converted := convertGroupedConversationToThread(conversation)
+			threadID, live := liveThreads[conversation]
+			if !live {
+				converted := convertGroupedConversationToThread(conversation)
+				threadID = converted.ID
+				threads = append(threads, converted)
+			}
+
 			for _, convID := range conversation.ConvIDs {
 				migrationRows = append(migrationRows, &modelnew.MigrationRow{
 					ID:         uuid.Must(uuid.NewV7()),
 					EntityType: modelnew.EntityTypeConversationThread,
 					OldID:      convID.String(),
-					NewID:      converted.ID,
+					NewID:      threadID,
 					DomainID:   conversation.DomainID,
 				})
 			}
@@ -111,10 +130,9 @@ func (c *Converter) MigrateConversations(ctx context.Context) error {
 				ID:         uuid.Must(uuid.NewV7()),
 				EntityType: modelnew.EntityTypeTypeAndInitiatorIDToThread,
 				OldID:      buildTypeAndInitiatorIDToThreadOldID(conversation.ClientType, conversation.Initiator),
-				NewID:      converted.ID,
+				NewID:      threadID,
 				DomainID:   conversation.DomainID,
 			})
-			threads = append(threads, converted)
 		}
 
 		if err := c.newDB.ThreadStore().InsertThreads(ctx, tx, threads); err != nil {
@@ -205,6 +223,11 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 	}
 
 	clientTypes, err := c.getConversationClientTypes(ctx)
+	if err != nil {
+		return err
+	}
+
+	botByType, err := c.getBotByType(ctx)
 	if err != nil {
 		return err
 	}
@@ -331,14 +354,27 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 			}
 		}
 
+		liveThreads, err := c.findLiveDirectThreads(ctx, tx, groupedConversations, botByType)
+		if err != nil {
+			_ = tx.Rollback(ctx)
+
+			return fail(err)
+		}
+
 		for _, conversation := range groupedConversations {
-			converted := convertGroupedConversationToThread(conversation)
+			threadID, live := liveThreads[conversation]
+			if !live {
+				converted := convertGroupedConversationToThread(conversation)
+				threadID = converted.ID
+				threads = append(threads, converted)
+			}
+
 			for _, convID := range conversation.ConvIDs {
 				migrationRows = append(migrationRows, &modelnew.MigrationRow{
 					ID:         uuid.Must(uuid.NewV7()),
 					EntityType: modelnew.EntityTypeConversationThread,
 					OldID:      convID.String(),
-					NewID:      converted.ID,
+					NewID:      threadID,
 					DomainID:   conversation.DomainID,
 				})
 			}
@@ -348,11 +384,10 @@ func (c *Converter) MigrateConversationsSyncMode(ctx context.Context) error {
 				ID:         uuid.Must(uuid.NewV7()),
 				EntityType: modelnew.EntityTypeTypeAndInitiatorIDToThread,
 				OldID:      buildTypeAndInitiatorIDToThreadOldID(conversation.ClientType, conversation.Initiator),
-				NewID:      converted.ID,
+				NewID:      threadID,
 				DomainID:   conversation.DomainID,
 				ExtraKey:   &syncExtraKey,
 			})
-			threads = append(threads, converted)
 		}
 
 		if err := c.newDB.ThreadStore().InsertThreads(ctx, tx, threads); err != nil {
@@ -394,4 +429,70 @@ func convertGroupedConversationToThread(groupedConversation *old.GroupedConversa
 		Subject:   groupedConversation.Title,
 		Kind:      modelnew.ThreadDirect,
 	}
+}
+
+func (c *Converter) findLiveDirectThreads(ctx context.Context, tx pgx.Tx, conversations []*old.GroupedConversation, botByType map[string]*modelnew.BotTypeMapping) (map[*old.GroupedConversation]uuid.UUID, error) {
+	initiatorIDs := make([]string, 0, len(conversations))
+	for _, conv := range conversations {
+		initiatorIDs = append(initiatorIDs, strconv.Itoa(conv.Initiator))
+	}
+
+	contactRows, err := c.resolver.ResolveMigrationRows(ctx, tx, &modelnew.MigrationRowFilters{
+		Type:   []modelnew.EntityType{modelnew.EntityTypeClientContact},
+		OldIDs: initiatorIDs,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("resolve initiator contacts: %w", err)
+	}
+
+	type contactKey struct {
+		domainID int
+		oldID    string
+	}
+
+	contacts := make(map[contactKey]uuid.UUID, len(contactRows))
+	for _, row := range contactRows {
+		contacts[contactKey{domainID: row.DomainID, oldID: row.OldID}] = row.NewID
+	}
+
+	pairs := make([]modelnew.DirectPair, 0, len(conversations))
+	pairOf := make(map[*old.GroupedConversation]modelnew.DirectPair, len(conversations))
+
+	for _, conv := range conversations {
+		bot, ok := botByType[conv.ClientType]
+		if !ok {
+			continue
+		}
+
+		clientID, ok := contacts[contactKey{domainID: conv.DomainID, oldID: strconv.Itoa(conv.Initiator)}]
+		if !ok {
+			continue
+		}
+
+		pair := modelnew.DirectPair{DomainID: conv.DomainID, ClientID: clientID, BotID: bot.NewBotID}
+		pairs = append(pairs, pair)
+		pairOf[conv] = pair
+	}
+
+	threads, err := c.newDB.ThreadStore().FindLiveDirectThreads(ctx, tx, pairs)
+	if err != nil {
+		return nil, err
+	}
+
+	live := make(map[*old.GroupedConversation]uuid.UUID, len(threads))
+
+	for conv, pair := range pairOf {
+		if threadID, ok := threads[pair]; ok {
+			live[conv] = threadID
+
+			c.log.Info("conversation joins existing direct thread",
+				"thread_id", threadID,
+				"initiator", conv.Initiator,
+				"client_type", conv.ClientType,
+				"domain_id", conv.DomainID,
+			)
+		}
+	}
+
+	return live, nil
 }

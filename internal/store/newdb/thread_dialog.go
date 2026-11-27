@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/Masterminds/squirrel"
+	"github.com/gofrs/uuid/v5" //nolint:depguard // NewV7AtTime is not available in google/uuid
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -105,4 +106,33 @@ func annotatePgError(err error) error {
 	}
 
 	return err
+}
+
+func (s *ThreadDialogStore) FindLiveDialogs(ctx context.Context, tx pgx.Tx, threadID uuid.UUID, memberIDs ...uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT DISTINCT ON (member_id) member_id, id
+		FROM im_thread.thread_dialog
+		WHERE thread_id = $1 AND member_id = ANY($2) AND deleted_at IS NULL
+		ORDER BY member_id, created_at`, threadID, memberIDs)
+	if err != nil {
+		return nil, fmt.Errorf("find live dialogs of thread %s: %w", threadID, err)
+	}
+	defer rows.Close()
+
+	dialogs := make(map[uuid.UUID]uuid.UUID, len(memberIDs))
+
+	for rows.Next() {
+		var memberID, dialogID uuid.UUID
+		if err := rows.Scan(&memberID, &dialogID); err != nil {
+			return nil, fmt.Errorf("scan live dialog: %w", err)
+		}
+
+		dialogs[memberID] = dialogID
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate live dialogs: %w", err)
+	}
+
+	return dialogs, nil
 }
