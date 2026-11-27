@@ -34,3 +34,9 @@ type ThreadMember struct {
 	MemberID uuid.UUID `json:"member_id" db:"member_id"`
 	Role     int       `json:"role" db:"role"`
 }
+
+type DirectPair struct {
+	DomainID int
+	ClientID uuid.UUID
+	BotID    uuid.UUID
+}
